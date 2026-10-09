@@ -236,6 +236,10 @@ impl TermApp {
                     item("Paste", Some(sel!(paste:)), "v", cmd),
                     item("Select All", Some(sel!(selectAll:)), "a", cmd),
                     sep(),
+                    item("Find…", Some(sel!(termFind:)), "f", cmd),
+                    item("Find Next", Some(sel!(termFindNext:)), "g", cmd),
+                    item("Find Previous", Some(sel!(termFindPrevious:)), "g", cmd | NSEventModifierFlags::Shift),
+                    sep(),
                     item("Clear Scrollback", Some(sel!(clearScrollback:)), "k", cmd),
                 ],
             ),
@@ -366,6 +370,10 @@ mod snap {
                     view.mem_bytes() as f64 / 1048576.0
                 );
             }
+            "find" => super::super::findbar::open_with(&view, arg),
+            "findnext" => super::super::findbar::step(&view, 1),
+            "findprev" => super::super::findbar::step(&view, -1),
+            "findclose" => super::super::findbar::close(&view),
             "mem" => println!(
                 "SNAP mem: footprint {:.1} MB, terminal {:.2} MB",
                 footprint_mb(),

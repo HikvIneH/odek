@@ -20,6 +20,7 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{NSArray, NSDictionary, NSNumber, NSPoint, NSRect, NSSize, NSString, NSUserDefaults};
 
+use super::findbar::{self, FindState};
 use super::grid::{Cell as GCell, Color, Line, Style, attr, flag};
 use super::input::{self, Mods};
 use super::session::{Session, Spawn};
@@ -146,6 +147,7 @@ pub struct Ivars {
     focused: Cell<bool>,
     cursor_row: Cell<usize>,
     exited: Cell<bool>,
+    pub(super) find: RefCell<Option<FindState>>,
 }
 
 define_class!(
@@ -257,6 +259,21 @@ define_class!(
             self.setNeedsDisplay(true);
         }
 
+        #[unsafe(method(termFind:))]
+        fn term_find(&self, _sender: Option<&AnyObject>) {
+            findbar::open(self);
+        }
+
+        #[unsafe(method(termFindNext:))]
+        fn term_find_next(&self, _sender: Option<&AnyObject>) {
+            findbar::step(self, 1);
+        }
+
+        #[unsafe(method(termFindPrevious:))]
+        fn term_find_previous(&self, _sender: Option<&AnyObject>) {
+            findbar::step(self, -1);
+        }
+
         #[unsafe(method(clearScrollback:))]
         fn clear_scrollback(&self, _sender: Option<&AnyObject>) {
             // Like ⌘K in Terminal: drop scrollback, then ask the program to redraw.
@@ -301,6 +318,7 @@ impl TermView {
             focused: Cell::new(false),
             cursor_row: Cell::new(0),
             exited: Cell::new(false),
+            find: RefCell::new(None),
         });
         let this: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame] };
         VIEWS.with(|v| v.borrow_mut().insert(id, Weak::from_retained(&this)));
@@ -390,7 +408,7 @@ impl TermView {
         (PAD_X, PAD_Y)
     }
 
-    fn with_term<R>(&self, f: impl FnOnce(&Term) -> R) -> Option<R> {
+    pub(super) fn with_term<R>(&self, f: impl FnOnce(&Term) -> R) -> Option<R> {
         let s = self.ivars().session.borrow();
         let s = s.as_ref()?;
         let t = s.term.lock().unwrap();
@@ -486,7 +504,7 @@ impl TermView {
     }
 
     /// Index (into `0..total_lines`) of the top visible line.
-    fn top_index(&self, t: &Term) -> usize {
+    pub(super) fn top_index(&self, t: &Term) -> usize {
         let live = t.total_lines() - t.rows;
         match self.ivars().anchor.get() {
             Some(id) if !t.alt_active => (id.saturating_sub(t.first_id()) as usize).min(live),
@@ -596,6 +614,7 @@ impl TermView {
                 })
             });
             self.draw_line(&t, t.line(idx), PAD_Y + r as f64 * m.ch, span);
+            findbar::paint(self, id, |a, b| cell_rect(m, a, b - a, PAD_Y + r as f64 * m.ch));
         }
         let live = top + t.rows == t.total_lines();
         if live && t.modes.show_cursor && !self.ivars().exited.get() {
@@ -790,7 +809,7 @@ impl TermView {
     }
 
     /// Scroll the view back (positive) or forward (negative) by lines.
-    fn scroll_lines(&self, n: isize) {
+    pub(super) fn scroll_lines(&self, n: isize) {
         let Some((first, total, rows, alt)) = self.with_term(|t| (t.first_id(), t.total_lines(), t.rows, t.alt_active))
         else {
             return;

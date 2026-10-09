@@ -68,6 +68,7 @@ define_class!(
                 bench.open_path(&path);
             }
             let _ = self.ivars().bench.set(bench);
+            super::notify::setup();
             tick();
             app.activate();
         }
@@ -138,6 +139,11 @@ define_class!(
     }
 
     impl TermApp {
+        #[unsafe(method(termSettings:))]
+        fn menu_settings(&self, _sender: Option<&AnyObject>) {
+            super::settings::show(self.mtm());
+        }
+
         #[unsafe(method(termNewTab:))]
         fn menu_new_tab(&self, _sender: Option<&AnyObject>) {
             self.with_bench(|b| b.new_tab());
@@ -237,6 +243,15 @@ define_class!(
             self.open_window(&dir, None, true);
         }
 
+        #[unsafe(method(termToggleNotify:))]
+        fn menu_toggle_notify(&self, sender: Option<&NSMenuItem>) {
+            let on = !super::notify::enabled();
+            super::notify::set_enabled(on);
+            if let Some(item) = sender {
+                item.setState(if on { NSControlStateValueOn } else { 0 });
+            }
+        }
+
         #[unsafe(method(termZoomIn:))]
         fn menu_zoom_in(&self, _sender: Option<&AnyObject>) {
             self.zoom(1.0);
@@ -250,7 +265,7 @@ define_class!(
         #[unsafe(method(termZoomReset:))]
         fn menu_zoom_reset(&self, _sender: Option<&AnyObject>) {
             if let Some(v) = self.key_view() {
-                v.set_font_size(super::view::DEFAULT_FONT_SIZE);
+                v.set_font_size(super::settings::font_size());
             }
         }
     }
@@ -436,6 +451,15 @@ impl TermApp {
         if NSUserDefaults::standardUserDefaults().boolForKey(&NSString::from_str("vimMode")) {
             vim.setState(NSControlStateValueOn);
         }
+        let notify = item(
+            "Notify When a Background Tab Needs Attention",
+            Some(sel!(termToggleNotify:)),
+            "",
+            cmd,
+        );
+        if super::notify::enabled() {
+            notify.setState(NSControlStateValueOn);
+        }
         let next_file = item("Next File", Some(sel!(appNextTab:)), "\t", ctrl);
         let prev_file = item("Previous File", Some(sel!(appPrevTab:)), "\t", ctrl | shift);
         let bar = NSMenu::new(mtm);
@@ -449,6 +473,8 @@ impl TermApp {
                         "",
                         cmd,
                     ),
+                    sep(),
+                    item("Settings…", Some(sel!(termSettings:)), ",", cmd),
                     sep(),
                     item(&format!("Hide {APP_NAME}"), Some(sel!(hide:)), "h", cmd),
                     item("Hide Others", Some(sel!(hideOtherApplications:)), "h", cmd | opt),
@@ -528,6 +554,7 @@ impl TermApp {
                     sep(),
                     item("Toggle Word Wrap", Some(sel!(appToggleWrap:)), "z", opt),
                     vim,
+                    notify,
                     sep(),
                     item("Bigger", Some(sel!(termZoomIn:)), "=", cmd),
                     item("Smaller", Some(sel!(termZoomOut:)), "-", cmd),
@@ -571,6 +598,16 @@ fn title_for(dir: &Path) -> String {
         Some(rest) if rest.as_os_str().is_empty() => "~".into(),
         Some(rest) => format!("~/{}", rest.display()),
         None => dir.display().to_string(),
+    }
+}
+
+/// A notification was clicked: bring its pane forward (or just activate).
+pub fn reveal_pane(pane: Option<super::workspace::Id>) {
+    if let Some(app) = instance() {
+        NSApplication::sharedApplication(app.mtm()).activate();
+        if let Some(id) = pane {
+            app.with_bench(|b| b.reveal_pane(id));
+        }
     }
 }
 
@@ -618,7 +655,7 @@ mod snap {
 
     use super::super::window::Workbench;
     use objc2::rc::Retained;
-    use objc2_app_kit::{NSApplication, NSBitmapImageFileType, NSView};
+    use objc2_app_kit::{NSBitmapImageFileType, NSView};
     use objc2_foundation::NSDictionary;
 
     use super::super::view::TermView;
@@ -663,6 +700,10 @@ mod snap {
         println!("SNAP pid={}", std::process::id());
         STATE.with(|s| *s.borrow_mut() = Some((view, steps, out)));
         next();
+    }
+
+    fn app_mtm() -> objc2::MainThreadMarker {
+        objc2::MainThreadMarker::new().unwrap()
     }
 
     fn after(secs: f64) {
@@ -771,6 +812,16 @@ mod snap {
                     view.mem_bytes() as f64 / 1048576.0
                 );
             }
+            "settings" => super::super::settings::show(app_mtm()),
+            "setting" => {
+                let (name, value) = arg.split_once(' ').unwrap_or((arg, ""));
+                super::super::settings::set_raw(name, value);
+            }
+            "snapwin" => {
+                if let Some(content) = super::super::settings::content_view() {
+                    snapshot(&content, &out.join(format!("{arg}.png")));
+                }
+            }
             "find" => super::super::findbar::open_with(&view, arg),
             "findnext" => super::super::findbar::step(&view, 1),
             "findprev" => super::super::findbar::step(&view, -1),
@@ -781,10 +832,10 @@ mod snap {
                 view.mem_bytes() as f64 / 1048576.0
             ),
             "quit" => {
+                // No confirmation dialogs in a scripted run: end everything.
                 view.shutdown();
-                let mtm = objc2::MainThreadMarker::new().unwrap();
-                NSApplication::sharedApplication(mtm).terminate(None);
-                return;
+                bench.iter().for_each(|b| b.shutdown_all());
+                std::process::exit(0);
             }
             other => eprintln!("SNAP unknown step {other}"),
         }

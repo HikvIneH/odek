@@ -375,14 +375,15 @@ impl Workbench {
                 }
                 self.refresh();
             }
-            ViewEvent::Attention(_) => {
+            ViewEvent::Attention(msg) => {
                 let seen = self.window.isKeyWindow() && self.focused_pane() == Some(id);
                 if !seen {
                     if let Some(p) = self.panes.borrow_mut().get_mut(&id) {
                         p.attention = true;
                     }
                     let app = NSApplication::sharedApplication(self.mtm);
-                    if !app.isActive() {
+                    let notified = self.notify_attention(id, msg.as_deref(), app.isActive());
+                    if !app.isActive() && !notified {
                         app.requestUserAttention(NSRequestUserAttentionType::InformationalRequest);
                     }
                     self.refresh();
@@ -415,6 +416,42 @@ impl Workbench {
         }
     }
 
+    /// Post a desktop notification when the pane's tab isn't in front.
+    fn notify_attention(&self, id: Id, msg: Option<&str>, app_active: bool) -> bool {
+        let (tab, tab_active) = {
+            let ws = self.ws.borrow();
+            let Some(tab) = ws.tab_of_pane(id) else {
+                return false;
+            };
+            (tab, ws.active == Some(tab))
+        };
+        if !super::notify::should_notify(app_active, self.window.isKeyWindow(), tab_active) {
+            return false;
+        }
+        let (title, dir) = {
+            let ws = self.ws.borrow();
+            ws.tab(tab).map(|t| self.tab_title(t)).unwrap_or_default()
+        };
+        super::notify::post(
+            tab,
+            id,
+            &super::notify::title_for(&title, &dir),
+            &super::notify::body_for(msg),
+        )
+    }
+
+    /// A notification was clicked: show that tab and focus the pane.
+    pub fn reveal_pane(&self, id: Id) {
+        self.window.makeKeyAndOrderFront(None);
+        let Some(tab) = self.ws.borrow().tab_of_pane(id) else {
+            return;
+        };
+        if let Some(t) = self.ws.borrow_mut().tab_mut(tab) {
+            t.focus = id;
+        }
+        self.select_tab(tab);
+    }
+
     fn focused_pane(&self) -> Option<Id> {
         self.ws.borrow().active_tab().map(|t| t.focus)
     }
@@ -436,6 +473,9 @@ impl Workbench {
         }
         if let Some(p) = self.panes.borrow_mut().get_mut(&id) {
             p.attention = false;
+        }
+        if let Some(tab) = self.ws.borrow().tab_of_pane(id) {
+            super::notify::clear(tab);
         }
         self.refresh();
     }

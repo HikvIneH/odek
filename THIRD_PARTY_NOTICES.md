@@ -41,6 +41,7 @@ crates.io and the repositories listed below; none are modified.
 | objc2-foundation | 0.3.2 | MIT | https://github.com/madsmtm/objc2 |
 | objc2-io-surface | 0.3.2 | Zlib OR Apache-2.0 OR MIT | https://github.com/madsmtm/objc2 |
 | objc2-quartz-core | 0.3.2 | Zlib OR Apache-2.0 OR MIT | https://github.com/madsmtm/objc2 |
+| objc2-user-notifications | 0.3.2 | Zlib OR Apache-2.0 OR MIT | https://github.com/madsmtm/objc2 |
 | proc-macro2 | 1.0.107 | MIT OR Apache-2.0 | https://github.com/dtolnay/proc-macro2 |
 | quote | 1.0.47 | MIT OR Apache-2.0 | https://github.com/dtolnay/quote |
 | regex | 1.13.1 | MIT OR Apache-2.0 | https://github.com/rust-lang/regex |

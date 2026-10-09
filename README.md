@@ -2,7 +2,7 @@
   <img src="assets/odek-lockup.png" width="420" alt="odek">
 </p>
 <p align="center">A tiny, native terminal for macOS, made for running coding agents side by side.<br>
-Grouped tabs, split panes and a built-in code viewer, in about 22 MB.</p>
+Grouped tabs, split panes and a built-in code viewer, in about a fifth of Warp's memory.</p>
 
 <p align="center">
   <a href="https://github.com/HikvIneH/odek/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/HikvIneH/odek/actions/workflows/ci.yml/badge.svg"></a>
@@ -70,20 +70,33 @@ changed without leaving the window.
 
 ## Performance
 
-Measured on an M1 Mac with 8 GB. Memory is the process footprint, the
-number Activity Monitor shows.
+Measured on an M1 Mac with 8 GB, macOS 26, a zsh with powerlevel10k. Memory is
+the process footprint, the number Activity Monitor shows.
+
+**What Activity Monitor shows** includes the window's drawing buffers, which
+macOS keeps for any app with a window on screen and which grow with the window:
+
+| One shell, idle, on screen | |
+|---|---|
+| odek, window maximized on a 2560×1600 display | ~107 MB (68 MB of it window buffers) |
+| Warp, fresh start, one tab, default window | ~233 MB (48 MB of it window buffers) |
+
+**odek's own memory**, without window buffers (measured with the window off
+screen, so it doesn't depend on window size):
 
 | | |
 |---|---|
-| One shell, idle | ~22 MB |
-| Claude Code running in a pane | ~36 MB |
-| Two tabs, three panes | ~45 MB |
-| Six panes, each with a full scrollback | ~75 MB (133 MB peak while all six printed at once) |
-| A file open in the code viewer beside a terminal | ~58 MB |
-| `seq 1 3000000` | 3.1 s, then back to ~35 MB |
+| One shell, idle | ~38 MB (Warp: ~185 MB) |
+| Two tabs, three panes | ~39 MB |
+| A file open in the code viewer beside a terminal | ~52 MB |
+| Six panes, each with a full scrollback | ~70 MB (91 MB peak while all six printed at once) |
 | Full scrollback (10,000 lines) | ~2 MB per pane |
+| `seq 1 3000000` | 2.9 s, then back to ~30 MB |
 | Reflowing 20,000 lines on resize | ~4 ms |
 | App size on disk | 19 MB |
+
+Programs you run (a shell, Claude Code, `vim`) are processes of their own and
+use the same memory in any terminal; they aren't counted above.
 
 ## Requirements
 

@@ -125,6 +125,12 @@ pub struct Term {
     last_char: Option<char>,
     /// The previous character was a zero-width joiner: the next one joins too.
     join_next: bool,
+    /// Stable ids of prompt starts (OSC 133;A), oldest first.
+    pub prompts: std::collections::VecDeque<u64>,
+    /// Between a prompt start and its command's output (OSC 133;C).
+    pub in_prompt: bool,
+    /// The shell sends prompt marks, so `prompts` and `in_prompt` are known.
+    pub shell_marks: bool,
     /// The last resize reflowed the main screen: line ids changed, so the
     /// view should drop its scroll anchor. Cleared by the view.
     pub reflowed: bool,
@@ -163,6 +169,9 @@ impl Term {
             last_char: None,
             join_next: false,
             reflowed: false,
+            prompts: std::collections::VecDeque::new(),
+            in_prompt: false,
+            shell_marks: false,
         }
     }
 
@@ -265,7 +274,16 @@ impl Term {
             return;
         }
         if cols != self.cols {
-            self.reflow_main(cols, rows);
+            let keep = self.prompt_rows();
+            let prompt_row = self.reflow_main(cols, rows, keep);
+            // Old marks pointed at lines that moved; keep the live prompt's.
+            let base = self.history.evicted + self.history.len() as u64;
+            self.prompts.clear();
+            if let Some(r) = prompt_row
+                && self.in_prompt
+            {
+                self.prompts.push_back(base + r as u64);
+            }
         }
         for grid in [&mut self.main, &mut self.alt] {
             for line in &mut grid.lines {
@@ -321,16 +339,55 @@ impl Term {
         self.all_dirty = true;
     }
 
+    /// Screen row from which the main screen must not be re-wrapped: the
+    /// prompt being edited. The shell redraws it after a resize by moving up
+    /// the number of lines it remembers, so those lines must stay as many.
+    /// With prompt marks that's the marked prompt. Without, it's the shape
+    /// that breaks: a full-width line ending in a real newline (a prompt's
+    /// top rule) right above the cursor's line.
+    fn prompt_rows(&self) -> Option<usize> {
+        if self.alt_active {
+            return None;
+        }
+        let row = self.cursor.row;
+        if !self.shell_marks {
+            let lines = &self.main.lines;
+            let used = |l: &Line| l.cells.iter().rposition(|c| !c.is_blank()).map_or(0, |i| i + 1);
+            let above = lines.get(row.checked_sub(1)?)?;
+            let joined_from_before = row >= 2 && lines[row - 2].wrapped;
+            let rule = !above.wrapped && !joined_from_before && used(above) + 2 >= self.cols;
+            // The cursor's line is cut rather than wrapped even when long:
+            // the shell rewrites it (prompt and typed text) right after.
+            return rule.then_some(row - 1);
+        }
+        if !self.in_prompt {
+            return None;
+        }
+        let base = self.history.evicted + self.history.len() as u64;
+        let id = *self.prompts.back()?;
+        (id >= base && ((id - base) as usize) <= row).then(|| (id - base) as usize)
+    }
+
+    /// Stable id of the cursor's line on the main screen.
+    fn cursor_line_id(&self) -> u64 {
+        self.history.evicted + self.history.len() as u64 + self.cursor.row as u64
+    }
+
     /// Re-wrap scrollback and the main screen to `cols`: soft-wrapped runs are
     /// joined into logical lines and split again. The cursor follows its
-    /// character and the screen stays anchored to the bottom.
-    fn reflow_main(&mut self, cols: usize, rows: usize) {
+    /// character and the screen stays anchored to the bottom. Screen rows from
+    /// `keep` on are only cut or padded, never re-wrapped. Returns the new
+    /// screen row of the first kept line.
+    fn reflow_main(&mut self, cols: usize, rows: usize, keep: Option<usize>) -> Option<usize> {
         let alt = self.alt_active;
         let cur = if alt { self.saved_main.cursor } else { self.cursor };
         let old_cols = self.cols;
         let hist = self.history.take();
         let cursor_idx = hist.len() + cur.row;
-        let screen = std::mem::take(&mut self.main.lines);
+        let mut screen = std::mem::take(&mut self.main.lines);
+        let keep = keep.filter(|&k| k < screen.len());
+        let tail = keep.map(|k| screen.split_off(k)).unwrap_or_default();
+        let cursor_in_tail = keep.is_some_and(|k| cur.row >= k);
         let mut src = hist.into_iter().chain(screen).enumerate().peekable();
 
         let mut out: Vec<Line> = Vec::new();
@@ -396,6 +453,18 @@ impl Term {
                 buf.shrink_to(1 << 12);
             }
         }
+        let tail_at = out.len();
+        if let Some(k) = keep {
+            if cursor_in_tail {
+                cursor_at = (tail_at + cur.row - k, cur.col.min(cols - 1));
+            }
+            for mut line in tail {
+                fit_width(&mut line, cols);
+                line.wrapped = false;
+                // Trimmed like the rest, so blank rows below the cursor drop.
+                out.push(line.trimmed());
+            }
+        }
         // Blank lines below the cursor are not content.
         while out.len() > cursor_at.0 + 1 && out.last().is_some_and(|l| l.cells.is_empty() && !l.wrapped) {
             out.pop();
@@ -422,6 +491,7 @@ impl Term {
         c.col = col;
         c.pending_wrap = false;
         self.reflowed = true;
+        keep.map(|_| tail_at.saturating_sub(top))
     }
 
     // ---- primitives ----
@@ -1185,6 +1255,24 @@ impl Perform for Term {
                     self.events.push(Event::Title(title));
                 }
             }
+            // Prompt marks (FinalTerm / OSC 133): A prompt, B command, C output, D done.
+            b"133" if !self.alt_active => {
+                self.shell_marks = true;
+                match params.get(1).and_then(|p| p.first()) {
+                    Some(b'A') => {
+                        let id = self.cursor_line_id();
+                        if self.prompts.back() != Some(&id) {
+                            self.prompts.push_back(id);
+                            if self.prompts.len() > 2000 {
+                                self.prompts.pop_front();
+                            }
+                        }
+                        self.in_prompt = true;
+                    }
+                    Some(b'C') => self.in_prompt = false,
+                    _ => {}
+                }
+            }
             b"7" => {
                 let url = text(1);
                 let path = url
@@ -1618,6 +1706,47 @@ mod tests {
                 .iter()
                 .all(|l| l.cells.last().is_none_or(|c| !c.is_blank()))
         );
+    }
+
+    /// A two-line prompt (top rule as wide as the screen, then `> `) keeps its
+    /// two lines through a resize, so the shell's redraw lands on it.
+    #[test]
+    fn prompt_lines_are_not_rewrapped() {
+        let mut t = Term::new(40, 6);
+        run(&mut t, b"output line\r\n");
+        run(&mut t, "╭".repeat(40).as_bytes());
+        run(&mut t, b"\r\n> ");
+        let before = t.cursor_pos();
+        t.resize(20, 6);
+        let (row, col) = t.cursor_pos();
+        assert_eq!(col, before.1);
+        let top = &t.grid().lines[row - 1];
+        assert_eq!(top.cells.len(), 20, "cut, not wrapped");
+        assert!(!top.wrapped);
+        assert_eq!(screen(&t)[row], ">");
+    }
+
+    #[test]
+    fn prompt_marks_pick_the_kept_rows() {
+        let mut t = Term::new(30, 8);
+        run(&mut t, b"\x1b]133;A\x07one\r\n\x1b]133;C\x07");
+        run(&mut t, "x".repeat(50).as_bytes());
+        run(&mut t, b"\r\n\x1b]133;A\x07");
+        run(&mut t, "=".repeat(30).as_bytes());
+        run(&mut t, b"\r\n$ ");
+        assert!(t.shell_marks && t.in_prompt);
+        t.resize(15, 8);
+        let text = screen(&t);
+        let (row, _) = t.cursor_pos();
+        // Output above the prompt re-wrapped (50 x's into 4 lines of 15)...
+        assert_eq!(text.iter().filter(|l| l.starts_with('x')).count(), 4);
+        // ...the prompt's two lines didn't.
+        assert_eq!(text[row], "$");
+        assert_eq!(text[row - 1], "=".repeat(15));
+        assert_eq!(t.prompts.len(), 1);
+        // While a command runs, everything reflows.
+        run(&mut t, b"\r\n\x1b]133;C\x07");
+        assert!(!t.in_prompt);
     }
 
     #[test]

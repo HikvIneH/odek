@@ -260,6 +260,11 @@ fn child_env() -> Vec<CString> {
     ] {
         env.push(CString::new(kv).unwrap());
     }
+    // powerlevel10k then marks its prompt (OSC 133), so a resize keeps the
+    // prompt intact instead of leaving copies of it behind.
+    if std::env::var_os("POWERLEVEL9K_TERM_SHELL_INTEGRATION").is_none() {
+        env.push(c"POWERLEVEL9K_TERM_SHELL_INTEGRATION=true".into());
+    }
     // Apps opened from Finder get no locale, and zsh then mangles UTF-8.
     if std::env::var_os("LANG").is_none() && std::env::var_os("LC_ALL").is_none() {
         env.push(c"LANG=en_US.UTF-8".into());

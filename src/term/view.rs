@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use dispatch2::DispatchQueue;
+use dispatch2::{DispatchQueue, DispatchTime};
 use objc2::AnyThread;
 use objc2::rc::{Retained, Weak};
 use objc2::runtime::{AnyObject, NSObject};
@@ -183,6 +183,8 @@ pub struct Ivars {
     exited: Cell<bool>,
     /// Background opacity from settings; below 1 the view isn't opaque.
     opacity: Cell<f64>,
+    /// Bumped on every size change; only the latest schedules a resize.
+    resize_gen: Cell<u64>,
     pub(super) find: RefCell<Option<FindState>>,
     hover: RefCell<Hover>,
     ime: Ime,
@@ -231,6 +233,12 @@ define_class!(
         #[unsafe(method(setFrameSize:))]
         fn set_frame_size(&self, size: NSSize) {
             let _: () = unsafe { msg_send![super(self), setFrameSize: size] };
+            self.fit_grid_soon();
+        }
+
+        #[unsafe(method(viewDidEndLiveResize))]
+        fn did_end_live_resize(&self) {
+            let _: () = unsafe { msg_send![super(self), viewDidEndLiveResize] };
             self.fit_grid();
         }
 
@@ -442,6 +450,7 @@ impl TermView {
             cursor_row: Cell::new(0),
             exited: Cell::new(false),
             opacity: Cell::new(settings::opacity()),
+            resize_gen: Cell::new(0),
             find: RefCell::new(None),
             hover: RefCell::new(Hover::default()),
             ime: Ime::default(),
@@ -606,6 +615,23 @@ impl TermView {
         let cols = ((b.width - 2.0 * PAD_X) / m.cw).floor().max(2.0) as u16;
         let rows = ((b.height - 2.0 * PAD_Y) / m.ch).floor().max(1.0) as u16;
         (cols, rows)
+    }
+
+    /// Resize the terminal once the size settles. A maximize or a window drag
+    /// changes the size many times; telling the shell each time makes it
+    /// redraw its prompt over and over, and each redraw can leave a copy.
+    fn fit_grid_soon(&self) {
+        let generation = self.ivars().resize_gen.get() + 1;
+        self.ivars().resize_gen.set(generation);
+        let id = self.ivars().id;
+        let when = DispatchTime::try_from(std::time::Duration::from_millis(80)).unwrap();
+        let _ = DispatchQueue::main().after(when, move || {
+            if let Some(view) = VIEWS.with(|v| v.borrow().get(&id).and_then(Weak::load))
+                && view.ivars().resize_gen.get() == generation
+            {
+                view.fit_grid();
+            }
+        });
     }
 
     fn fit_grid(&self) {

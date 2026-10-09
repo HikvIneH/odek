@@ -125,7 +125,9 @@ impl Workbench {
         split.addSubview(&sidebar.view);
         split.addSubview(&content);
         let blur = NSVisualEffectView::initWithFrame(NSVisualEffectView::alloc(mtm), bounds);
-        blur.setMaterial(NSVisualEffectMaterial::UnderWindowBackground);
+        // HUD is a dark, see-through frosted glass; the window-background
+        // materials are nearly opaque and would hide the desktop.
+        blur.setMaterial(NSVisualEffectMaterial::HUDWindow);
         blur.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
         blur.setState(NSVisualEffectState::Active);
         blur.setAutoresizingMask(

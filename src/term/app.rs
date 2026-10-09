@@ -11,10 +11,11 @@ use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol, ProtocolObject, Sel}
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSAlert, NSAlertFirstButtonReturn, NSApplication, NSApplicationDelegate, NSApplicationTerminateReply,
-    NSBackingStoreType, NSEventModifierFlags, NSMenu, NSMenuItem, NSRequestUserAttentionType, NSWindow,
-    NSWindowDelegate, NSWindowStyleMask, NSWorkspace,
+    NSBackingStoreType, NSControlStateValueOn, NSEventModifierFlags, NSMenu, NSMenuItem,
+    NSRequestUserAttentionType, NSTextFinderAction, NSWindow, NSWindowDelegate, NSWindowStyleMask,
+    NSWorkspace,
 };
-use objc2_foundation::{NSNotification, NSPoint, NSRect, NSSize, NSString, NSURL};
+use objc2_foundation::{NSArray, NSNotification, NSPoint, NSRect, NSSize, NSString, NSURL, NSUserDefaults};
 
 use super::view::{TermView, ViewEvent};
 use super::window::Workbench;
@@ -40,6 +41,8 @@ pub struct Ivars {
     open_dir: Option<PathBuf>,
     panes: RefCell<Vec<Pane>>,
     bench: OnceCell<Rc<Workbench>>,
+    /// Paths that arrived (Finder, `open -a`) before the window existed.
+    pending: RefCell<Vec<PathBuf>>,
 }
 
 define_class!(
@@ -61,6 +64,9 @@ define_class!(
             }
             let bench = Workbench::new(ProtocolObject::from_ref(self), self.mtm());
             bench.start(self.ivars().open_dir.clone(), true);
+            for path in self.ivars().pending.take() {
+                bench.open_path(&path);
+            }
             let _ = self.ivars().bench.set(bench);
             tick();
             app.activate();
@@ -69,6 +75,22 @@ define_class!(
         #[unsafe(method(applicationShouldTerminateAfterLastWindowClosed:))]
         fn terminate_after_last_window(&self, _app: &NSApplication) -> bool {
             true
+        }
+
+        #[unsafe(method(application:openURLs:))]
+        fn open_urls(&self, _app: &NSApplication, urls: &NSArray<NSURL>) {
+            for url in urls.iter() {
+                let Some(path) = url.to_file_path() else { continue };
+                match self.ivars().bench.get() {
+                    Some(b) => b.open_path(&path),
+                    None => self.ivars().pending.borrow_mut().push(path.to_path_buf()),
+                }
+            }
+        }
+
+        #[unsafe(method(applicationDidBecomeActive:))]
+        fn did_become_active(&self, _n: &NSNotification) {
+            self.with_bench(|b| b.app_activated());
         }
 
         #[unsafe(method(applicationShouldTerminate:))]
@@ -192,6 +214,18 @@ define_class!(
             self.with_bench(|b| b.toggle_sidebar());
         }
 
+        // Reaches here only when a terminal has focus; the viewer handles
+        // its own ⌘P and ⇧⌘E first through the responder chain.
+        #[unsafe(method(appQuickOpen:))]
+        fn menu_quick_open(&self, _sender: Option<&AnyObject>) {
+            self.with_bench(|b| b.quick_open_here());
+        }
+
+        #[unsafe(method(termShowFiles:))]
+        fn menu_show_files(&self, _sender: Option<&AnyObject>) {
+            self.with_bench(|b| b.show_files_here());
+        }
+
         #[unsafe(method(termSearchTabs:))]
         fn menu_search_tabs(&self, _sender: Option<&AnyObject>) {
             self.with_bench(|b| b.search_tabs());
@@ -233,6 +267,7 @@ impl TermApp {
             open_dir,
             panes: RefCell::new(Vec::new()),
             bench: OnceCell::new(),
+            pending: RefCell::new(Vec::new()),
         });
         let this: Retained<Self> = unsafe { msg_send![super(this), init] };
         INSTANCE.with(|i| {
@@ -254,11 +289,15 @@ impl TermApp {
         responder.downcast::<TermView>().ok()
     }
 
-    /// True when nothing is running, or the user agrees to end it.
+    /// True when nothing is running and no file is unsaved, or the user
+    /// agrees to end and discard.
     fn confirm_running(&self, question: &str) -> bool {
         let Some(b) = self.ivars().bench.get() else {
             return true;
         };
+        if !b.viewer_confirm_discard() {
+            return false;
+        }
         let running = b.running_everywhere();
         if running.is_empty() {
             return true;
@@ -385,6 +424,20 @@ impl TermApp {
             holder
         };
         let sep = || NSMenuItem::separatorItem(mtm);
+        let ctrl = NSEventModifierFlags::Control;
+        // Text finder commands carry their action in the tag; only the code
+        // viewer's text view answers them, so they're greyed out in terminals.
+        let finder = |title: &str, key: &str, mods, action: NSTextFinderAction| {
+            let it = item(title, Some(sel!(performTextFinderAction:)), key, mods);
+            it.setTag(action.0);
+            it
+        };
+        let vim = item("Vim Mode", Some(sel!(appToggleVim:)), "v", cmd | opt);
+        if NSUserDefaults::standardUserDefaults().boolForKey(&NSString::from_str("vimMode")) {
+            vim.setState(NSControlStateValueOn);
+        }
+        let next_file = item("Next File", Some(sel!(appNextTab:)), "\t", ctrl);
+        let prev_file = item("Previous File", Some(sel!(appPrevTab:)), "\t", ctrl | shift);
         let bar = NSMenu::new(mtm);
         for m in [
             menu(
@@ -419,15 +472,44 @@ impl TermApp {
                 ],
             ),
             menu(
+                "File",
+                vec![
+                    item("Quick Open…", Some(sel!(appQuickOpen:)), "p", cmd),
+                    item("Show Files", Some(sel!(termShowFiles:)), "e", cmd | shift),
+                    sep(),
+                    item("Save", Some(sel!(appSave:)), "s", cmd),
+                    item("Reveal in Finder", Some(sel!(appRevealInFinder:)), "r", cmd | opt),
+                ],
+            ),
+            menu(
                 "Edit",
                 vec![
+                    item("Undo", Some(sel!(undo:)), "z", cmd),
+                    item("Redo", Some(sel!(redo:)), "z", cmd | shift),
+                    sep(),
+                    item("Cut", Some(sel!(cut:)), "x", cmd),
                     item("Copy", Some(sel!(copy:)), "c", cmd),
                     item("Paste", Some(sel!(paste:)), "v", cmd),
                     item("Select All", Some(sel!(selectAll:)), "a", cmd),
                     sep(),
+                    item("Toggle Line Comment", Some(sel!(appToggleComment:)), "/", cmd),
+                    item("Go to Line…", Some(sel!(appGoToLine:)), "g", ctrl),
+                    sep(),
                     item("Find…", Some(sel!(termFind:)), "f", cmd),
+                    finder(
+                        "Replace…",
+                        "f",
+                        cmd | opt,
+                        NSTextFinderAction::ShowReplaceInterface,
+                    ),
                     item("Find Next", Some(sel!(termFindNext:)), "g", cmd),
                     item("Find Previous", Some(sel!(termFindPrevious:)), "g", cmd | shift),
+                    finder(
+                        "Use Selection for Find",
+                        "e",
+                        cmd,
+                        NSTextFinderAction::SetSearchString,
+                    ),
                     sep(),
                     item("Clear Scrollback", Some(sel!(clearScrollback:)), "k", cmd),
                     item(
@@ -444,7 +526,10 @@ impl TermApp {
                     item("Toggle Sidebar", Some(sel!(termToggleSidebar:)), "b", cmd),
                     item("Search Tabs…", Some(sel!(termSearchTabs:)), "f", cmd | shift),
                     sep(),
-                    item("Bigger", Some(sel!(termZoomIn:)), "+", cmd),
+                    item("Toggle Word Wrap", Some(sel!(appToggleWrap:)), "z", opt),
+                    vim,
+                    sep(),
+                    item("Bigger", Some(sel!(termZoomIn:)), "=", cmd),
                     item("Smaller", Some(sel!(termZoomOut:)), "-", cmd),
                     item("Actual Size", Some(sel!(termZoomReset:)), "0", cmd),
                 ],
@@ -457,6 +542,8 @@ impl TermApp {
                     item("Previous Tab", Some(sel!(termPreviousTab:)), "[", cmd | shift),
                     item("Next Pane", Some(sel!(termNextPane:)), "]", cmd),
                     item("Previous Pane", Some(sel!(termPreviousPane:)), "[", cmd),
+                    next_file,
+                    prev_file,
                     sep(),
                 ];
                 for n in 1..=9 {
@@ -608,8 +695,20 @@ mod snap {
             "newtab" => bench.iter().for_each(|b| b.new_tab()),
             "split" => bench.iter().for_each(|b| b.split(arg != "down")),
             "rename" => bench.iter().for_each(|b| b.name_active_tab(arg)),
+            "renamegroup" => bench.iter().for_each(|b| b.name_active_group(arg)),
             "group" => bench.iter().for_each(|b| b.move_active_to_new_group(arg)),
             "nexttab" => bench.iter().for_each(|b| b.cycle_tab(true)),
+            "open" => {
+                // open <path>[:line[:col]]
+                let mut parts = arg.splitn(3, ':');
+                let path = PathBuf::from(parts.next().unwrap_or(""));
+                let line = parts.next().and_then(|v| v.parse().ok());
+                let col = parts.next().and_then(|v| v.parse().ok());
+                bench.iter().for_each(|b| b.open_in_viewer(&path, line, col));
+            }
+            "quickopen" => bench.iter().for_each(|b| b.quick_open_here()),
+            "files" => bench.iter().for_each(|b| b.show_files_here()),
+            "focusterm" => bench.iter().for_each(|b| b.cycle_pane(false)),
             "frames" => {
                 fn dump(v: &objc2_app_kit::NSView, depth: usize) {
                     let f = v.frame();
@@ -639,6 +738,7 @@ mod snap {
                 }
             }
             "snapws" => {
+                bench.iter().for_each(|b| b.tick());
                 if let Some(content) = bench.as_ref().and_then(|b| b.window.contentView()) {
                     snapshot(&content, &out.join(format!("{arg}.png")));
                     println!("SNAP {arg}: footprint {:.1} MB", footprint_mb());

@@ -107,7 +107,7 @@ impl App {
         if !self.ivars().vim_on.get() {
             self.vim_toggle(None);
         }
-        ui.window.makeFirstResponder(Some(&ui.text));
+        ui.window.as_ref().unwrap().makeFirstResponder(Some(&ui.text));
         for ch in keys.chars() {
             let (text, code): (String, u16) = match ch {
                 '⎋' => ("\u{1b}".into(), 53),
@@ -120,7 +120,7 @@ impl App {
                 objc2_foundation::NSPoint::new(0.0, 0.0),
                 NSEventModifierFlags::empty(),
                 0.0,
-                ui.window.windowNumber(),
+                ui.window.as_ref().unwrap().windowNumber(),
                 None,
                 &s,
                 &s,
@@ -154,7 +154,11 @@ impl App {
         let ui = self.ui();
         let dir = self.ivars().selftest.borrow().as_ref().map(|t| t.dir.clone());
         let Some(dir) = dir else { return };
-        let window: &objc2_app_kit::NSWindow = if panel { &ui.panel } else { &ui.window };
+        let window: &objc2_app_kit::NSWindow = if panel {
+            &ui.panel
+        } else {
+            ui.window.as_ref().unwrap()
+        };
         // The content view's superview is the frame view, which includes the title bar.
         if let Some(content) = window.contentView() {
             let view = unsafe { content.superview() }.unwrap_or(content);

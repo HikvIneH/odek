@@ -32,6 +32,15 @@ define_class!(
             false
         }
 
+        #[unsafe(method(becomeFirstResponder))]
+        fn become_first_responder(&self) -> bool {
+            let ok: bool = unsafe { msg_send![super(self), becomeFirstResponder] };
+            if ok {
+                crate::app::editor_focused();
+            }
+            ok
+        }
+
         #[unsafe(method(keyDown:))]
         fn key_down(&self, event: &NSEvent) {
             if !crate::app::vim_key_down(event) {

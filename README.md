@@ -5,9 +5,8 @@
 <h1 align="center">Odek</h1>
 
 <p align="center">
-  A tiny, native macOS terminal for working alongside coding agents, with a
-  built-in code viewer for when you need to look at the files.<br>
-  Idles at ~22 MB.
+  <em>A tiny, native terminal for macOS, made for running coding agents side by side.</em><br>
+  Grouped tabs, split panes and a built-in code viewer, in about 22 MB.
 </p>
 
 <p align="center">
@@ -18,94 +17,80 @@
   <img alt="UI: AppKit" src="https://img.shields.io/badge/UI-AppKit-black.svg">
 </p>
 
-> **Status:** the terminal is under active development (`odek --term`). It
-> runs real shells and programs such as Claude Code, with grouped tabs, split
-> panes and session restore. Next: opening files from the terminal in the code
-> viewer. The code viewer itself is complete.
+<p align="center">
+  <img src="docs/screenshot.png" width="860" alt="Odek: a sidebar of tabs grouped by project, a terminal pane showing git history and files, and the code viewer showing Rust source beside it">
+</p>
 
 ## Why
 
-A day of work can mean several coding-agent sessions side by side, each in its
-own terminal pane, plus an occasional look at the code. Modern GPU terminals
-with built-in AI and cloud features can sit at several hundred megabytes and
-grow into gigabytes after a long session. That hurts on an 8 GB laptop.
+A working day can mean several coding agents running at once, each in its own
+terminal, with a quick look at the code now and then. Terminals that draw with
+their own GPU renderer and ship AI and cloud features tend to sit at several
+hundred megabytes and grow into gigabytes after a long session. On an 8 GB
+laptop that is memory your builds and browsers need.
 
-Odek does the same everyday job with the parts macOS already has: AppKit and
-Core Text draw everything, so there is no GPU renderer, font engine or UI
-framework of its own to keep in memory. Terminal cells take 8 bytes, styles are
-stored once, and scrollback has a hard cap, so memory stays flat however much
-output a session produces.
+Odek does the everyday job with what macOS already has. AppKit and Core Text
+draw every character, so there is no renderer, font engine or UI toolkit of its
+own to keep in memory. A terminal cell takes 8 bytes, colours are stored once,
+and scrollback has a hard cap, so memory stays flat no matter how much output a
+session produces.
 
-## Terminal
+## Features
 
-Working now:
+### Workspace
 
-- **Tabs grouped by project** in a sidebar: search, drag to reorder or move between groups, rename, collapse; each tab shows its folder and a status dot (green while a program runs, orange when one rang the bell or sent a notification you haven't seen)
-- **Split panes**: side by side or stacked, as many as you like, with draggable dividers
-- **Comes back as you left it**: groups, tabs, splits and each pane's folder are restored on relaunch (the shells start fresh)
-- **Asks before ending work**: closing a pane, tab or the app asks first when a program such as Claude Code is still running
+- **Tabs grouped by project** in a sidebar: search, drag to reorder or move between groups, rename, collapse
+- **Status at a glance**: each tab shows its folder and a dot, green while a program runs and orange when one rang the bell or sent a notification you haven't seen
+- **Split panes**, side by side or stacked, as many as you like, with draggable dividers
+- **Comes back as you left it**: groups, tabs, splits and every pane's folder are restored on relaunch
+- **Asks before ending work**: closing a pane, tab or the app asks first while a program such as Claude Code is still running, or a file has unsaved changes
+
+### Terminal
+
 - **Runs anything**: your login shell, `vim`, `htop`, and coding agents such as Claude Code, with 24-bit colour, synchronized output (no flicker), bracketed paste, mouse reporting and focus events
 - **Keys that agents expect**: Shift+Return for a newline, Shift+Tab, Option as Meta (Option+←/→ jump words), ⌘←/⌘→/⌘⌫ for line editing
-- **Unicode**: wide CJK characters, emoji with skin tones and joined sequences, combining accents
+- **Titles that mean something**: a program's own title while it runs (Claude Code shows its task there), the folder at a shell prompt
+- **Text reflows** when a pane is resized, scrollback included
+- **Unicode**: wide CJK characters, emoji with skin tones and joined sequences, combining accents, input methods and the emoji picker
 - **Clean lines**: box-drawing and block characters are drawn as shapes, so borders and logos join without gaps in any font
 - **Nerd Font icons**: uses MesloLGS NF (or another Nerd Font) when installed, so prompt themes like powerlevel10k show their icons
-- **Scrollback** of 10,000 lines per shell (capped at 8 MB), selection by drag, double-click (word) and triple-click (line), copy and paste, ⌘K to clear
-- **Find** in scrollback (⌘F), smart-case, with every match highlighted
-- **Links**: ⌘-click URLs and file paths (`src/main.rs:42:7` too), including the hyperlinks Claude Code prints
-- **Input methods**: the emoji picker, accents, and Chinese/Japanese/Korean input
-- **Titles** from the running program (Claude Code shows its task there), the folder at a shell prompt; Dock bounce on bell or notification when Odek is in the background
-- **Light and dark** themes that follow the system
+- **Scrollback** of 10,000 lines per pane, find (⌘F) with every match highlighted, selection by word or line, ⌘K to clear
+- **Links**: ⌘-click URLs and file paths, including `path:line:col` and the hyperlinks Claude Code prints
 
-Planned, in this order:
+### Code viewer
 
-1. **Code viewer inside the window**: ⌘-click a file path to open it at the line, ⌘P in the current pane's folder, a file-explorer toggle
-2. Reflowing text when a pane is resized, command blocks for plain shells, settings, themes
+Files open in a pane beside your terminal, so you can read what an agent just
+changed without leaving the window.
 
-## Code viewer
-
-The original Odek: a file tree and an editor, nothing else. No Electron, no
-language servers, no extensions. It keeps VS Code's keyboard shortcuts and
-habits, and has an optional Vim mode.
-
-<p align="center">
-  <img src="docs/screenshot.png" width="820" alt="Odek's code viewer showing a Rust file with the file tree, syntax highlighting, git branch and Vim mode in the status bar">
-</p>
-
-- **File tree** that loads lazily; `.gitignore`d files shown dimmed, `.git` hidden
-- **Preview tabs** like VS Code: single-click previews, double-click or typing keeps the tab
-- **Quick open** (⌘P) with fuzzy matching that respects `.gitignore`
+- **⌘-click a path** in the terminal to open it at that line, or press **⌘P** to search the files of the folder you're in; **⇧⌘E** shows the file tree
 - **Syntax highlighting** with tree-sitter for Go, TypeScript/TSX, JavaScript/JSX, Rust, Swift, Python, SQL, LaTeX, Markdown, JSON, YAML, CSS, HTML and shell
-- **Git status bar**: branch, commits to pull and push, uncommitted changes, background fetch, fast-forward pull
-- **Vim mode** (optional): motions, operators, counts, visual mode, search, `:w` / `:q`
-- **Editing basics**: line numbers, find and replace, go to line, toggle comment, auto-indent, word wrap
-- **Picks up outside changes**: the tree and unmodified open files reload when you switch back to the app
+- **Light editing** with VS Code's keys: save, find and replace, go to line, toggle comment, auto-indent, word wrap; an optional **Vim mode**
+- **Git in the status bar**: branch, commits to pull and push, uncommitted changes, background fetch, fast-forward pull
+- **Picks up outside changes**: files an agent rewrote reload when you come back to the app
+- **Stays light**: at most 8 files are kept in memory, big files open without highlighting, and closing the pane frees them
 
 ## Performance
 
-Measured on an M1 MacBook (8 GB). Memory is the process footprint, the number
-Activity Monitor shows.
+Measured on an M1 Mac with 8 GB. Memory is the process footprint, the
+number Activity Monitor shows.
 
-| Terminal | |
+| | |
 |---|---|
 | One shell, idle | ~22 MB |
-| Claude Code running in a 120×36 window | ~36 MB |
-| 3 million lines printed (`seq 1 3000000`) | 3.1 s; settles back to ~35 MB |
-| Full scrollback (10,000 lines) | ~2 MB of terminal data |
-
-| Code viewer | |
-|---|---|
-| Project open, no file | ~22 MB |
-| One file open | ~50 MB |
-| Five files open | ~57 MB |
-| Main window on screen after launch | ~140 ms |
-
-The app is 19 MB on disk.
+| Claude Code running in a pane | ~36 MB |
+| Two tabs, three panes | ~45 MB |
+| A file open in the code viewer beside a terminal | ~58 MB |
+| `seq 1 3000000` | 3.1 s, then back to ~35 MB |
+| Full scrollback (10,000 lines) | ~2 MB per pane |
+| Reflowing 20,000 lines on resize | ~4 ms |
+| App size on disk | 19 MB |
 
 ## Requirements
 
 - macOS 12 or later (built and tested on Apple Silicon)
 - Rust toolchain (`cargo`) to build from source
-- `git` (the one that comes with Xcode Command Line Tools is fine) for the git status bar
+- `git` (the one from Xcode Command Line Tools is fine) for the git status bar
+- Optional: a [Nerd Font](https://www.nerdfonts.com) such as MesloLGS NF for prompt icons
 
 ## Installation
 
@@ -121,72 +106,72 @@ This builds a release binary, wraps it in `Odek.app`, signs it ad hoc, and
 installs:
 
 - `~/Applications/Odek.app`
-- `~/.local/bin/odek`, a small launcher script (make sure `~/.local/bin` is on your `PATH`)
+- `~/.local/bin/odek`, a small launcher (make sure `~/.local/bin` is on your `PATH`)
 
 `scripts/bundle.sh` without `--install` only builds `dist/Odek.app`.
-
-While the terminal is in development, `scripts/install-term-preview.sh`
-installs it as a separate app, `~/Applications/Odek Terminal Preview.app`,
-that opens straight into the terminal and leaves `Odek.app` alone.
 
 ## Usage
 
 ```sh
-odek --term             # terminal: restores your tabs
-odek --term ~/code/app  # same, plus a new tab in that folder
-odek .                  # code viewer on the current folder
-odek src/main.go        # code viewer on a file; its folder becomes the project
+odek                    # open Odek; your tabs come back
+odek ~/code/app         # a new tab in that folder
+odek src/main.rs        # the file in the code viewer
+odek --viewer ~/code    # the code viewer in a window of its own
 ```
 
-Each `odek` call opens its own window and process, like `code .`.
+`odek` hands paths to the Odek that's already running, so everything stays in
+one window. You can also drop a folder or file on the Dock icon.
 
-The terminal font is the first one installed of MesloLGS NF and a few other
-Nerd Fonts, otherwise SF Mono. To choose another:
-
-```sh
-defaults write com.hikvineh.odek terminalFont "JetBrains Mono"
-```
-
-### Terminal shortcuts
+### Tabs and panes
 
 | Key | Action |
 |---|---|
 | ⌘T | New tab in the current folder and group |
 | ⇧⌘N | New group |
 | ⌘D / ⇧⌘D | Split right / split down |
-| ⌘W / ⇧⌘W | Close pane / close tab |
+| ⌘W / ⇧⌘W | Close pane (in the code viewer: the file, then the pane) / close tab |
 | ⌘1 … ⌘8, ⌘9 | Go to tab 1 … 8, last tab |
 | ⇧⌘] / ⇧⌘[ | Next / previous tab |
 | ⌘] / ⌘[ | Next / previous pane |
-| ⇧⌘R | Rename tab (empty name: follow the program's title) |
+| ⇧⌘R | Rename tab (an empty name follows the program's title) |
 | ⌘B, ⇧⌘F | Toggle sidebar, search tabs |
-| ⌘F, ⌘G / ⇧⌘G | Find in scrollback, next / previous match |
+
+Right-click a tab or group for more: move a tab to another group, rename or
+delete a group (its tabs are kept).
+
+### Terminal
+
+| Key | Action |
+|---|---|
 | ⌘C / ⌘V | Copy selection / paste |
 | ⌘A | Select all, scrollback included |
+| ⌘F, ⌘G / ⇧⌘G | Find, next / previous match |
 | ⌘K | Clear scrollback |
 | ⇧PageUp / ⇧PageDown, ⇧Home / ⇧End | Scroll back / forward, to top / bottom |
 | ⌘← / ⌘→ / ⌘⌫ | Start of line / end of line / delete line |
 | ⌥← / ⌥→ / ⌥⌫ | Word left / word right / delete word |
 | ⇧Return | Newline without sending (Claude Code and similar) |
+| ⌘-click | Open a URL or file path |
 | ⌘= / ⌘- / ⌘0 | Font size |
 
-### Code viewer shortcuts
+### Code viewer
 
 | Key | Action |
 |---|---|
-| ⌘P | Quick open |
-| ⌘O | Open folder |
-| ⌘S / ⌘W | Save / close tab |
+| ⌘P | Quick open a file in the current project |
+| ⇧⌘E | Show or hide the file tree |
+| ⌘S | Save |
 | ⌘F, ⌥⌘F | Find, replace |
-| ⌘G, ⇧⌘G, ⌘E | Next match, previous match, use selection for find |
+| ⌘G / ⇧⌘G, ⌘E | Next / previous match, use selection for find |
 | ⌃G | Go to line (`42` or `42:7`) |
 | ⌘/ | Toggle line comment |
-| ⌘B | Toggle sidebar |
+| ⌃Tab / ⌃⇧Tab | Next / previous file |
 | ⌥Z | Toggle word wrap (on by default for Markdown and LaTeX) |
-| ⌘= / ⌘- / ⌘0 | Font size |
-| ⇧⌘] / ⇧⌘[, ⌃Tab / ⌃⇧Tab | Next / previous tab |
-| ⌥⌘R | Reveal file in Finder |
 | ⌥⌘V | Toggle Vim mode |
+| ⌥⌘R | Reveal the file in Finder |
+
+The project is the nearest git repository around the file or folder, so ⌘P in
+a terminal inside `~/code/app/src` searches all of `~/code/app`.
 
 ### Vim mode
 
@@ -211,19 +196,21 @@ registers other than the unnamed one.
 
 ### Git
 
-The code viewer's status bar shows the current branch, like VS Code.
-`main •  ↓2 ↑1` means uncommitted changes (`•`), 2 commits to pull (`↓`, shown
-in orange) and 1 to push (`↑`).
+The code viewer's status bar shows the current branch. `main •  ↓2 ↑1` means
+uncommitted changes (`•`), 2 commits to pull (`↓`, shown in orange) and 1 to
+push (`↑`). Odek runs `git fetch` in the background when a project opens and
+when you switch back to the app, at most every 5 minutes; fetch never changes
+your files. Click the branch for **Fetch Now** and **Pull (fast-forward only)**,
+which refuses rather than merging when your branch has diverged.
 
-- Odek runs `git fetch` in the background when a project opens and when you
-  switch back to the app, at most every 5 minutes. Fetch never changes your
-  files.
-- Click the branch for **Fetch Now** and **Pull (fast-forward only)**. Pull
-  refuses rather than merging when your branch has diverged, and asks you to
-  save open edits first.
+### Fonts
 
-It runs the system `git`, so it adds nothing to the app's size or resident
-memory.
+The terminal uses the first installed of MesloLGS NF and a few other Nerd
+Fonts, otherwise SF Mono. To choose another:
+
+```sh
+defaults write com.hikvineh.odek terminalFont "JetBrains Mono"
+```
 
 ## How it works
 
@@ -232,106 +219,107 @@ Terminal:
 - **Parsing**: the [`vte`](https://crates.io/crates/vte) crate (the parser
   Alacritty uses) feeds Odek's own screen model.
 - **8-byte cells**: each cell holds the character, a style index and flags.
-  Colours and attributes are interned once per shell, and emoji sequences live
-  in a small shared table.
+  Colours, attributes and hyperlinks are interned once per pane, and emoji
+  sequences live in a small shared table.
 - **Capped scrollback**: lines leaving the screen are trimmed of trailing
-  blanks and kept up to 10,000 lines or 8 MB, whichever comes first.
+  blanks and kept up to 10,000 lines or 8 MB, whichever comes first. Resizing
+  re-wraps soft-wrapped lines rather than cutting them.
 - **Drawing**: AppKit string drawing (Core Text underneath) in a plain
-  `NSView`, redrawing only the rows that changed. Font fallback for emoji and
+  `NSView`, redrawing only the rows that changed; font fallback for emoji and
   CJK comes from the system.
-- **One pty per shell** with a reader thread and a writer thread, so a large
-  paste never blocks the window. Updates are batched into one redraw per
-  frame, and a synchronized update is shown only when it is complete.
-- **No shell hooks**: the folder and program name of a shell come from the
-  operating system (`proc_pidinfo`), not from scripts injected into your shell.
-- **Workspace**: a small model of groups, tabs and split trees, saved as an
-  indented text file in `~/Library/Application Support/Odek/workspace.txt`.
-  Inactive tabs keep running but are taken out of the window, so they cost
-  no drawing.
+- **One pty per pane** with a reader thread and a writer thread, so a large
+  paste never blocks the window. Updates are batched into one redraw per frame,
+  and a synchronized update is shown only once it is complete.
+- **No shell hooks**: a pane's folder and program come from the operating
+  system (`proc_pidinfo`), not from scripts injected into your shell.
+
+Workspace:
+
+- A small model of groups, tabs and split trees, saved as an indented text file
+  in `~/Library/Application Support/Odek/workspace.txt`.
+- Tabs you aren't looking at keep running but are taken out of the window, so
+  they cost no drawing.
 
 Code viewer:
 
-- **Lazy tree**: a folder is read only when you expand it.
-- **At most 8 tabs** stay in memory; opening a 9th closes the least recently
-  used tab without unsaved changes.
-- **Big files**: over 2 MB opens without highlighting; over 20 MB opens the
-  first 5 MB read-only; binary files aren't loaded.
-- **Highlighting**: tree-sitter grammars are compiled in, but each is set up
-  only when a file of that language is first opened.
-- **Text view**: TextKit 1 `NSTextView`, opted out of responsive scrolling so
-  only the visible part of a document is rendered.
+- One viewer, created the first time you open a file and moved to whichever tab
+  asks for it. It is an `NSViewController`, so menu commands reach it through
+  AppKit's responder chain whenever it has focus.
+- TextKit 1 `NSTextView`, opted out of responsive scrolling so only the visible
+  part of a file is rendered. Highlighting colours are temporary layout
+  attributes, so recolouring never re-lays out text or touches undo.
+- Tree-sitter grammars are compiled in, but each is set up only when a file of
+  that language is first opened. Over 2 MB opens without highlighting; over
+  20 MB opens the first 5 MB read-only; binary files aren't loaded.
 
 ## Development
 
 ```sh
-cargo test                       # unit tests: terminal, tree, fuzzy match, highlighting, git, Vim, edits
-cargo run -- --term              # terminal, debug build
-cargo run -- ~/some/project      # code viewer, debug build
+cargo test                 # unit tests: terminal, workspace, find, links, viewer, git, Vim
+cargo run                  # debug build
+cargo run -- --viewer .    # the code viewer on its own
 ```
 
-Both parts can be driven off-screen, writing PNG snapshots and memory numbers,
+Both halves can be driven off-screen, writing PNG snapshots and memory numbers,
 so UI changes can be checked without screen recording:
 
 ```sh
 cargo build --release --features selftest   # the self-tests are left out of normal builds
 
-# terminal: one step per line (wait, keys, resize, snap, mem, quit, find, …)
+# a terminal pane: one step per line (wait, keys, resize, snap, mem, find, quit, …)
 scripts/termsnap.sh <out-dir> <start-dir> @steps.txt ['<command>']
-# the workspace window instead, with its own throwaway save file
-ODEK_TERM_WS=1 ODEK_WORKSPACE_FILE=/tmp/ws.txt scripts/termsnap.sh …
 
-# code viewer
+# the whole window (tabs, splits, the code viewer), with a throwaway save file
+ODEK_TERM_WS=1 ODEK_WORKSPACE_FILE=/tmp/ws.txt scripts/termsnap.sh <out-dir> <start-dir> @steps.txt
+
+# the code viewer on its own
 scripts/selftest.sh target/release/odek <project> <out-dir> <query> <file>...
 ```
 
-For the code viewer self-test, extra environment variables:
-`SELFTEST_NOSNAP=1` (measure memory without the snapshot bitmaps),
-`SELFTEST_IDLE=12` (open files, then idle and sample), `SELFTEST_PIN=1`
-(pinned tabs instead of preview), `SELFTEST_LIGHT=1`, and `SELFTEST_VIM='keys'`
-(type Vim keys through real key events; `⎋` is Esc, `⏎` is Return).
+`scripts/install-term-preview.sh` installs a build as a separate
+`Odek Terminal Preview.app`, to try a branch without replacing `Odek.app`.
 
-The icon ("stanza": code lines set like verse) is drawn by
-`assets/make-icon.swift`, with simpler artwork at 16 and 32 px;
-`assets/make-icns.sh` rebuilds `assets/AppIcon.icns`.
+The icon is drawn by `assets/make-icon.swift`, with simpler artwork at 16 and
+32 px; `assets/make-icns.sh` rebuilds `assets/AppIcon.icns`.
 
 ### Project layout
 
 ```
-src/main.rs          NSApplication setup; `--term` picks the terminal
-src/term/vt.rs        terminal state machine (escape sequences → screen)
-src/term/grid.rs      cells, interned styles, capped scrollback
-src/term/session.rs   pty, shell process, reader and writer threads
-src/term/view.rs      terminal NSView: drawing, keys, mouse, selection
-src/term/input.rs     key, paste and mouse encoding
-src/term/ime.rs       input methods (marked text, emoji picker)
-src/term/find.rs      search in scrollback; findbar.rs is its UI
-src/term/links.rs     URL and file path detection
-src/term/boxdraw.rs   box-drawing and block characters as shapes
-src/term/workspace.rs groups, tabs, split trees; save and restore
-src/term/window.rs    workspace window: sidebar, panes, dialogs
-src/term/sidebar.rs   grouped tab list; header.rs is the pane title strip
-src/term/app.rs       app delegate, menus, scripted snapshot mode
-src/app.rs           code viewer: window, tree, tabs, editor, quick open, menus
-src/tree.rs          lazy file tree model
-src/fuzzy.rs         file listing and nucleo ranking for ⌘P
-src/highlight.rs     tree-sitter languages → coloured UTF-16 spans
-src/theme.rs         GitHub light/dark palette as dynamic NSColors
-src/ruler.rs         line-number gutter
-src/codeview.rs      NSTextView subclass (block cursor, key routing)
-src/edit.rs          pure text transforms (comment toggle, indent)
-src/git.rs           branch, ahead/behind, fetch, pull via the git CLI
-src/gitbar.rs        status-bar branch button and menu
-src/vim.rs           Vim engine over an abstract buffer
-src/vimglue.rs       NSTextView adapter for the Vim engine
-src/selftest.rs      scripted code viewer test
+src/main.rs            entry point: the terminal, or --viewer
+src/term/app.rs        app delegate, menus, scripted snapshot mode
+src/term/window.rs     workspace window: sidebar, panes, code viewer pane, dialogs
+src/term/workspace.rs  groups, tabs, split trees; save and restore
+src/term/sidebar.rs    grouped tab list; header.rs is the pane title strip
+src/term/vt.rs         terminal state machine (escape sequences → screen), reflow
+src/term/grid.rs       cells, interned styles, capped scrollback
+src/term/session.rs    pty, shell process, reader and writer threads
+src/term/view.rs       terminal view: drawing, keys, mouse, selection
+src/term/input.rs      key, paste and mouse encoding
+src/term/ime.rs        input methods (marked text, emoji picker)
+src/term/find.rs       search in scrollback; findbar.rs is its UI
+src/term/links.rs      URL and file path detection
+src/term/boxdraw.rs    box-drawing and block characters as shapes
+src/app.rs             code viewer: tree, tabs, editor, quick open, embedding
+src/tree.rs            lazy file tree model
+src/fuzzy.rs           file listing and nucleo ranking for ⌘P
+src/highlight.rs       tree-sitter languages → coloured UTF-16 spans
+src/theme.rs           GitHub light/dark palette as dynamic NSColors
+src/ruler.rs           line-number gutter
+src/codeview.rs        text view subclass (block cursor, key routing, focus)
+src/edit.rs            pure text transforms (comment toggle, indent)
+src/git.rs             branch, ahead/behind, fetch, pull via the git CLI
+src/gitbar.rs          status-bar branch button and menu
+src/vim.rs             Vim engine over an abstract buffer
+src/vimglue.rs         text view adapter for the Vim engine
+src/selftest.rs        scripted code viewer test
 ```
 
 ## Contributing
 
 Issues and pull requests are welcome. Before opening a PR:
 
-1. Run `cargo fmt`, `cargo clippy --all-targets -- -D warnings` and `cargo test`
-   (CI runs the same on macOS).
+1. Run `cargo fmt`, `cargo clippy --all-targets -- -D warnings` (with and
+   without `--features selftest`) and `cargo test`; CI runs the same on macOS.
 2. For UI changes, run `scripts/termsnap.sh` or `scripts/selftest.sh` and check
    the snapshots.
 3. Keep the footprint in mind: a feature that adds resident memory or startup

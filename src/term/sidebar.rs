@@ -322,7 +322,7 @@ impl SidebarList {
                     let dragged = drag.is_some_and(|d| d.moving && d.tab == *id);
                     if *active || dragged {
                         let fill = if *active {
-                            NSColor::controlAccentColor().colorWithAlphaComponent(0.28)
+                            brand_blue().colorWithAlphaComponent(0.28)
                         } else {
                             NSColor::quaternaryLabelColor()
                         };
@@ -366,7 +366,7 @@ impl SidebarList {
             ..
         }) = drag
         {
-            NSColor::controlAccentColor().setFill();
+            brand_blue().setFill();
             NSBezierPath::fillRect(NSRect::new(
                 NSPoint::new(12.0, y - 1.0),
                 NSSize::new(width - 24.0, 2.0),
@@ -381,6 +381,16 @@ fn shown_group_index(rows: &[Row], end: usize) -> usize {
         .rev()
         .find(|&i| matches!(rows[i], Row::Group { .. }))
         .unwrap_or(0)
+}
+
+/// The cursor blue from the icon, for the active tab and drop line.
+fn brand_blue() -> Retained<NSColor> {
+    NSColor::colorWithSRGBRed_green_blue_alpha(
+        0x3B as f64 / 255.0,
+        0x82 as f64 / 255.0,
+        0xF6 as f64 / 255.0,
+        1.0,
+    )
 }
 
 fn row_height(row: &Row) -> f64 {

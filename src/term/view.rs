@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use dispatch2::DispatchQueue;
+use dispatch2::{DispatchQueue, DispatchTime};
 use objc2::AnyThread;
 use objc2::rc::{Retained, Weak};
 use objc2::runtime::{AnyObject, NSObject};
@@ -183,6 +183,8 @@ pub struct Ivars {
     exited: Cell<bool>,
     /// Background opacity from settings; below 1 the view isn't opaque.
     opacity: Cell<f64>,
+    /// Bumped on every size change; only the latest schedules a resize.
+    resize_gen: Cell<u64>,
     pub(super) find: RefCell<Option<FindState>>,
     hover: RefCell<Hover>,
     ime: Ime,
@@ -231,6 +233,12 @@ define_class!(
         #[unsafe(method(setFrameSize:))]
         fn set_frame_size(&self, size: NSSize) {
             let _: () = unsafe { msg_send![super(self), setFrameSize: size] };
+            self.fit_grid_soon();
+        }
+
+        #[unsafe(method(viewDidEndLiveResize))]
+        fn did_end_live_resize(&self) {
+            let _: () = unsafe { msg_send![super(self), viewDidEndLiveResize] };
             self.fit_grid();
         }
 
@@ -287,6 +295,21 @@ define_class!(
             self.handle_scroll(event);
         }
 
+        /// ⌘/ shares Edit ▸ Toggle Line Comment with the code viewer; in a
+        /// terminal it opens the Keyboard Shortcuts panel.
+        #[unsafe(method(appToggleComment:))]
+        fn show_shortcuts(&self, _sender: Option<&AnyObject>) {
+            super::shortcuts::toggle(self.mtm());
+        }
+
+        #[unsafe(method(validateMenuItem:))]
+        fn validate_menu_item(&self, item: &objc2_app_kit::NSMenuItem) -> bool {
+            if item.action() == Some(objc2::sel!(appToggleComment:)) {
+                item.setTitle(&NSString::from_str("Keyboard Shortcuts"));
+            }
+            true
+        }
+
         #[unsafe(method(copy:))]
         fn copy(&self, _sender: Option<&AnyObject>) {
             if let Some(text) = self.selected_text() {
@@ -333,14 +356,72 @@ define_class!(
 
         #[unsafe(method(clearScrollback:))]
         fn clear_scrollback(&self, _sender: Option<&AnyObject>) {
-            // Like ⌘K in Terminal: drop scrollback, then ask the program to redraw.
+            // Clear to Start (⌘K): drop scrollback, then ask the program to redraw.
             if let Some(s) = self.ivars().session.borrow().as_ref() {
-                s.term.lock().unwrap().history.clear();
+                let mut t = s.term.lock().unwrap();
+                t.clear_scrollback();
+                t.marks.clear();
+                drop(t);
                 s.write(vec![0x0c]);
             }
-            self.ivars().anchor.set(None);
-            self.ivars().selection.set(None);
-            self.setNeedsDisplay(true);
+            self.reset_view();
+        }
+
+        #[unsafe(method(termClearScrollbackOnly:))]
+        fn term_clear_scrollback_only(&self, _sender: Option<&AnyObject>) {
+            self.edit_term(Term::clear_scrollback);
+        }
+
+        #[unsafe(method(termClearToMark:))]
+        fn term_clear_to_mark(&self, _sender: Option<&AnyObject>) {
+            self.edit_term(|t| {
+                t.clear_to_mark();
+            });
+        }
+
+        #[unsafe(method(termClearScreen:))]
+        fn term_clear_screen(&self, _sender: Option<&AnyObject>) {
+            self.edit_term(Term::clear_screen);
+        }
+
+        #[unsafe(method(termPreviousMark:))]
+        fn term_previous_mark(&self, _sender: Option<&AnyObject>) {
+            self.jump_mark(-1);
+        }
+
+        #[unsafe(method(termNextMark:))]
+        fn term_next_mark(&self, _sender: Option<&AnyObject>) {
+            self.jump_mark(1);
+        }
+
+        #[unsafe(method(termScrollToTop:))]
+        fn term_scroll_to_top(&self, _sender: Option<&AnyObject>) {
+            self.scroll_lines(isize::MAX / 2);
+        }
+
+        #[unsafe(method(termScrollToBottom:))]
+        fn term_scroll_to_bottom(&self, _sender: Option<&AnyObject>) {
+            self.scroll_lines(-isize::MAX / 2);
+        }
+
+        #[unsafe(method(termPageUp:))]
+        fn term_page_up(&self, _sender: Option<&AnyObject>) {
+            self.scroll_lines(self.with_term(|t| t.rows).unwrap_or(1) as isize - 1);
+        }
+
+        #[unsafe(method(termPageDown:))]
+        fn term_page_down(&self, _sender: Option<&AnyObject>) {
+            self.scroll_lines(1 - self.with_term(|t| t.rows).unwrap_or(1) as isize);
+        }
+
+        #[unsafe(method(termLineUp:))]
+        fn term_line_up(&self, _sender: Option<&AnyObject>) {
+            self.scroll_lines(1);
+        }
+
+        #[unsafe(method(termLineDown:))]
+        fn term_line_down(&self, _sender: Option<&AnyObject>) {
+            self.scroll_lines(-1);
         }
     }
 
@@ -442,6 +523,7 @@ impl TermView {
             cursor_row: Cell::new(0),
             exited: Cell::new(false),
             opacity: Cell::new(settings::opacity()),
+            resize_gen: Cell::new(0),
             find: RefCell::new(None),
             hover: RefCell::new(Hover::default()),
             ime: Ime::default(),
@@ -537,6 +619,36 @@ impl TermView {
         self.with_term(|t| t.screen_text()).unwrap_or_default()
     }
 
+    /// Scrollback + screen as text; the line at the view's top is prefixed `>`
+    /// and marked lines `*`.
+    #[cfg(feature = "selftest")]
+    pub fn all_text(&self) -> String {
+        let anchor = self.ivars().anchor.get();
+        self.with_term(|t| {
+            let live = t.first_id() + (t.total_lines() - t.rows) as u64;
+            let top = anchor.unwrap_or(live);
+            let mut out = String::new();
+            for i in 0..t.total_lines() {
+                let id = t.first_id() + i as u64;
+                let mut text = String::new();
+                super::grid::line_text(t.line(i), &t.clusters, &mut text);
+                let flag = if id == top { '>' } else { ' ' };
+                let mark = if t.marks.contains(&id) { '*' } else { ' ' };
+                out.push_str(&format!("{flag}{mark}{}\n", text.trim_end()));
+            }
+            out
+        })
+        .unwrap_or_default()
+    }
+
+    /// Type `text` and press Return the way a key press does (marks the line).
+    #[cfg(feature = "selftest")]
+    pub fn submit(&self, text: &str) {
+        self.write(text.as_bytes());
+        self.with_term_mut(Term::mark_return);
+        self.write(b"\r");
+    }
+
     pub fn write(&self, bytes: &[u8]) {
         if let Some(s) = self.ivars().session.borrow().as_ref() {
             s.write(bytes.to_vec());
@@ -606,6 +718,23 @@ impl TermView {
         let cols = ((b.width - 2.0 * PAD_X) / m.cw).floor().max(2.0) as u16;
         let rows = ((b.height - 2.0 * PAD_Y) / m.ch).floor().max(1.0) as u16;
         (cols, rows)
+    }
+
+    /// Resize the terminal once the size settles. A maximize or a window drag
+    /// changes the size many times; telling the shell each time makes it
+    /// redraw its prompt over and over, and each redraw can leave a copy.
+    fn fit_grid_soon(&self) {
+        let generation = self.ivars().resize_gen.get() + 1;
+        self.ivars().resize_gen.set(generation);
+        let id = self.ivars().id;
+        let when = DispatchTime::try_from(std::time::Duration::from_millis(80)).unwrap();
+        let _ = DispatchQueue::main().after(when, move || {
+            if let Some(view) = VIEWS.with(|v| v.borrow().get(&id).and_then(Weak::load))
+                && view.ivars().resize_gen.get() == generation
+            {
+                view.fit_grid();
+            }
+        });
     }
 
     fn fit_grid(&self) {
@@ -1055,6 +1184,9 @@ impl TermView {
                 _ => {}
             }
         }
+        if matches!(key, 0x0d | 0x03) && !mods.cmd {
+            self.with_term_mut(Term::mark_return);
+        }
         let app_cursor = self.with_term(|t| t.modes.app_cursor).unwrap_or(false);
         match input::encode_key(&chars, &bare, mods, app_cursor) {
             Some(bytes) if !bytes.is_empty() => {
@@ -1112,6 +1244,36 @@ impl TermView {
 
     fn follow_output(&self) {
         if self.ivars().anchor.replace(None).is_some() {
+            self.setNeedsDisplay(true);
+        }
+    }
+
+    /// Run an edit on the terminal's lines; ids change, so the view lets go
+    /// of its scroll anchor and selection.
+    fn edit_term(&self, f: impl FnOnce(&mut Term)) {
+        self.with_term_mut(f);
+        self.reset_view();
+    }
+
+    fn reset_view(&self) {
+        self.ivars().anchor.set(None);
+        self.ivars().selection.set(None);
+        self.setNeedsDisplay(true);
+    }
+
+    /// Scroll so the previous (`-1`) or next (`1`) mark is the top line.
+    fn jump_mark(&self, dir: i32) {
+        let target = self.with_term(|t| {
+            if t.alt_active {
+                return None;
+            }
+            let live = t.first_id() + (t.total_lines() - t.rows) as u64;
+            let top = self.ivars().anchor.get().unwrap_or(live);
+            t.mark_from(top, dir).map(|m| m.min(live))
+        });
+        if let Some(Some(id)) = target {
+            let live = self.with_term(|t| t.first_id() + (t.total_lines() - t.rows) as u64);
+            self.ivars().anchor.set((Some(id) != live).then_some(id));
             self.setNeedsDisplay(true);
         }
     }

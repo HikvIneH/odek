@@ -125,7 +125,9 @@ impl Workbench {
         split.addSubview(&sidebar.view);
         split.addSubview(&content);
         let blur = NSVisualEffectView::initWithFrame(NSVisualEffectView::alloc(mtm), bounds);
-        blur.setMaterial(NSVisualEffectMaterial::UnderWindowBackground);
+        // HUD is a dark, see-through frosted glass; the window-background
+        // materials are nearly opaque and would hide the desktop.
+        blur.setMaterial(NSVisualEffectMaterial::HUDWindow);
         blur.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
         blur.setState(NSVisualEffectState::Active);
         blur.setAutoresizingMask(
@@ -247,6 +249,12 @@ impl Workbench {
             t.name = Some(name.to_string());
         }
         self.refresh();
+    }
+
+    #[cfg(feature = "selftest")]
+    pub fn viewer_debug(&self) -> String {
+        let app = self.viewer.borrow().as_ref().map(|v| v.app.clone());
+        app.map_or("no viewer".into(), |a| a.debug_scroll())
     }
 
     #[cfg(feature = "selftest")]

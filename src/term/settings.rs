@@ -112,9 +112,9 @@ pub fn opacity() -> f64 {
     }
 }
 
-/// Blur what's behind a translucent window (on unless turned off).
+/// Blur what's behind a translucent window (off unless turned on).
 pub fn blur() -> bool {
-    defaults().objectForKey(&key(BLUR)).is_none() || defaults().boolForKey(&key(BLUR))
+    defaults().boolForKey(&key(BLUR))
 }
 
 pub fn option_as_meta() -> bool {

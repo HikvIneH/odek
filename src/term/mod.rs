@@ -10,6 +10,7 @@ pub mod links;
 mod notify;
 pub mod session;
 mod settings;
+mod shortcuts;
 mod sidebar;
 mod target;
 pub mod view;

@@ -523,6 +523,15 @@ define_class!(
             self.go_to_line();
         }
 
+        #[unsafe(method(validateMenuItem:))]
+        fn validate_menu_item(&self, item: &NSMenuItem) -> bool {
+            // A terminal renames ⌘/ to Keyboard Shortcuts; here it comments.
+            if item.action() == Some(sel!(appToggleComment:)) {
+                item.setTitle(ns_string!("Toggle Line Comment"));
+            }
+            true
+        }
+
         #[unsafe(method(appToggleComment:))]
         fn menu_toggle_comment(&self, _sender: Option<&AnyObject>) {
             self.toggle_comment();
@@ -848,6 +857,26 @@ impl App {
         if let Some(w) = self.host_window() {
             w.makeFirstResponder(Some(&ui.outline));
         }
+    }
+
+    /// Selftest: where the editor is scrolled, for checking jumps.
+    #[cfg(feature = "selftest")]
+    pub fn debug_scroll(&self) -> String {
+        let ui = self.ui();
+        let clip = ui.scroll.contentView();
+        let b = clip.bounds();
+        let i = clip.contentInsets();
+        format!(
+            "clip origin ({:.1},{:.1}) size ({:.1}x{:.1}) insets left {:.1} top {:.1} ruler {:.1} visible {}",
+            b.origin.x,
+            b.origin.y,
+            b.size.width,
+            b.size.height,
+            i.left,
+            i.top,
+            ui.ruler.ruleThickness(),
+            ui.scroll.rulersVisible()
+        )
     }
 
     /// Keyboard focus to the editor, or the tree when no file is open.
@@ -1178,6 +1207,13 @@ impl App {
         text.setAutomaticLinkDetectionEnabled(false);
         text.setSmartInsertDeleteEnabled(false);
         text.setTextContainerInset(NSSize::new(4.0, 6.0));
+        // The cursor blue from the icon (also the Vim block cursor).
+        text.setInsertionPointColor(Some(&NSColor::colorWithSRGBRed_green_blue_alpha(
+            0x3B as f64 / 255.0,
+            0x82 as f64 / 255.0,
+            0xF6 as f64 / 255.0,
+            1.0,
+        )));
         text.setEditable(false);
         text.setDelegate(Some(ProtocolObject::from_ref(self)));
         scroll.setDocumentView(Some(&text));
@@ -2355,6 +2391,23 @@ impl App {
         let r = NSRange::new(target, 0);
         ui.text.setSelectedRange(r);
         ui.text.scrollRangeToVisible(r);
+        // scrollRangeToVisible doesn't know the line-number gutter covers the
+        // clip view's left edge (origin x is -inset at rest), so near the
+        // start of a line it scrolls the first characters under the gutter.
+        // Put x back at rest when the column fits in the visible width.
+        let clip = ui.scroll.contentView();
+        let insets = clip.contentInsets();
+        let mut origin = clip.bounds().origin;
+        let char_w = unsafe {
+            NSString::from_str("M").sizeWithAttributes(Some(&attrs(&[(NSFontAttributeName, &*self.font())])))
+        }
+        .width;
+        let visible = clip.bounds().size.width - insets.left;
+        if (col as f64) * char_w < visible - 4.0 * char_w {
+            origin.x = -insets.left;
+            clip.scrollToPoint(origin);
+            ui.scroll.reflectScrolledClipView(&clip);
+        }
         if let Some(w) = self.host_window() {
             w.makeFirstResponder(Some(&ui.text));
         }

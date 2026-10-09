@@ -232,6 +232,11 @@ define_class!(
             self.with_bench(|b| b.show_files_here());
         }
 
+        #[unsafe(method(termShowShortcuts:))]
+        fn menu_show_shortcuts(&self, _sender: Option<&AnyObject>) {
+            super::shortcuts::toggle(self.mtm());
+        }
+
         #[unsafe(method(termSearchTabs:))]
         fn menu_search_tabs(&self, _sender: Option<&AnyObject>) {
             self.with_bench(|b| b.search_tabs());
@@ -439,6 +444,8 @@ impl TermApp {
             holder
         };
         let sep = || NSMenuItem::separatorItem(mtm);
+        // Function keys are key equivalents by their AppKit code point.
+        let key = |code: u32| char::from_u32(code).unwrap().to_string();
         let ctrl = NSEventModifierFlags::Control;
         // Text finder commands carry their action in the tag; only the code
         // viewer's text view answers them, so they're greyed out in terminals.
@@ -537,7 +544,16 @@ impl TermApp {
                         NSTextFinderAction::SetSearchString,
                     ),
                     sep(),
-                    item("Clear Scrollback", Some(sel!(clearScrollback:)), "k", cmd),
+                    item("Clear to Previous Mark", Some(sel!(termClearToMark:)), "l", cmd),
+                    item("Clear Screen", Some(sel!(termClearScreen:)), "l", cmd | ctrl),
+                    item("Clear to Start", Some(sel!(clearScrollback:)), "k", cmd),
+                    item(
+                        "Clear Scrollback",
+                        Some(sel!(termClearScrollbackOnly:)),
+                        "k",
+                        cmd | opt,
+                    ),
+                    sep(),
                     item(
                         "Emoji & Symbols",
                         Some(sel!(orderFrontCharacterPalette:)),
@@ -551,6 +567,20 @@ impl TermApp {
                 vec![
                     item("Toggle Sidebar", Some(sel!(termToggleSidebar:)), "b", cmd),
                     item("Search Tabs…", Some(sel!(termSearchTabs:)), "f", cmd | shift),
+                    sep(),
+                    item("Previous Mark", Some(sel!(termPreviousMark:)), &key(0xF700), cmd),
+                    item("Next Mark", Some(sel!(termNextMark:)), &key(0xF701), cmd),
+                    item("Scroll to Top", Some(sel!(termScrollToTop:)), &key(0xF729), cmd),
+                    item(
+                        "Scroll to Bottom",
+                        Some(sel!(termScrollToBottom:)),
+                        &key(0xF72B),
+                        cmd,
+                    ),
+                    item("Page Up", Some(sel!(termPageUp:)), &key(0xF72C), cmd),
+                    item("Page Down", Some(sel!(termPageDown:)), &key(0xF72D), cmd),
+                    item("Line Up", Some(sel!(termLineUp:)), &key(0xF72C), cmd | opt),
+                    item("Line Down", Some(sel!(termLineDown:)), &key(0xF72D), cmd | opt),
                     sep(),
                     item("Toggle Word Wrap", Some(sel!(appToggleWrap:)), "z", opt),
                     vim,
@@ -585,6 +615,18 @@ impl TermApp {
                 }
                 items
             }),
+            // ⌘/ lives on Edit ▸ Toggle Line Comment: a terminal answers that
+            // item by showing this panel (and renames it), the code viewer by
+            // commenting. Two items can't share a key equivalent.
+            menu(
+                "Help",
+                vec![item(
+                    "Keyboard Shortcuts",
+                    Some(sel!(termShowShortcuts:)),
+                    "",
+                    cmd,
+                )],
+            ),
         ] {
             bar.addItem(&m);
         }
@@ -741,6 +783,7 @@ mod snap {
                     .replace("\\t", "\t");
                 view.write(text.as_bytes());
             }
+            "line" => view.submit(arg),
             "insert" => view.commit_text(arg),
             "newtab" => bench.iter().for_each(|b| b.new_tab()),
             "split" => bench.iter().for_each(|b| b.split(arg != "down")),
@@ -757,6 +800,9 @@ mod snap {
                 bench.iter().for_each(|b| b.open_in_viewer(&path, line, col));
             }
             "quickopen" => bench.iter().for_each(|b| b.quick_open_here()),
+            "viewerscroll" => bench
+                .iter()
+                .for_each(|b| println!("SNAP viewer {}", b.viewer_debug())),
             "files" => bench.iter().for_each(|b| b.show_files_here()),
             "focusterm" => bench.iter().for_each(|b| b.cycle_pane(false)),
             "frames" => {
@@ -821,7 +867,59 @@ mod snap {
                     view.mem_bytes() as f64 / 1048576.0
                 );
             }
+            "cmd" => {
+                // cmd <selector name, no colon>: invoke a menu action on the view.
+                let sel = objc2::runtime::Sel::register(&std::ffi::CString::new(format!("{arg}:")).unwrap());
+                let _: () = unsafe {
+                    objc2::msg_send![&*view, performSelector: sel, withObject: std::ptr::null::<objc2::runtime::AnyObject>()]
+                };
+            }
+            "dump" => {
+                std::fs::write(out.join(format!("{arg}.txt")), view.all_text()).ok();
+            }
             "settings" => super::super::settings::show(app_mtm()),
+            // menukey <char> [ctrl|opt|shift|cmd …]: a real key event through the menus.
+            "menukey" => {
+                let mut parts = arg.split_whitespace();
+                let ch = parts.next().unwrap_or("");
+                let mut mods = objc2_app_kit::NSEventModifierFlags::empty();
+                for m in parts {
+                    mods |= match m {
+                        "ctrl" => objc2_app_kit::NSEventModifierFlags::Control,
+                        "opt" => objc2_app_kit::NSEventModifierFlags::Option,
+                        "shift" => objc2_app_kit::NSEventModifierFlags::Shift,
+                        _ => objc2_app_kit::NSEventModifierFlags::Command,
+                    };
+                }
+                let chars = objc2_foundation::NSString::from_str(ch);
+                let window = view.window();
+                let event = objc2_app_kit::NSEvent::keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode(
+                    objc2_app_kit::NSEventType::KeyDown,
+                    objc2_foundation::NSPoint::new(0.0, 0.0),
+                    mods,
+                    0.0,
+                    window.as_ref().map_or(0, |w| w.windowNumber()),
+                    None,
+                    &chars,
+                    &chars,
+                    false,
+                    0,
+                );
+                if let Some(event) = event {
+                    let handled = objc2_app_kit::NSApplication::sharedApplication(app_mtm())
+                        .mainMenu()
+                        .is_some_and(|m| m.performKeyEquivalent(&event));
+                    println!(
+                        "SNAP menukey {arg}: handled {handled}, shortcuts panel {}",
+                        super::super::shortcuts::is_visible()
+                    );
+                }
+            }
+            "snapshortcuts" => {
+                if let Some(content) = super::super::shortcuts::content_view() {
+                    snapshot(&content, &out.join(format!("{arg}.png")));
+                }
+            }
             "setting" => {
                 let (name, value) = arg.split_once(' ').unwrap_or((arg, ""));
                 super::super::settings::set_raw(name, value);

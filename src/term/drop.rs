@@ -95,7 +95,8 @@ pub fn text(pb: &NSPasteboard) -> Option<String> {
             .and_then(|s| NSURL::URLWithString(&s))
             .and_then(|u| u.path());
         if let Some(p) = url {
-            paths.push(p.to_string());
+            let p = p.to_string();
+            paths.push(readable_copy(&p).unwrap_or(p));
         } else if let Some(p) = save_image(&item) {
             paths.push(p.to_string_lossy().into_owned());
         }
@@ -106,6 +107,27 @@ pub fn text(pb: &NSPasteboard) -> Option<String> {
     }
     pb.stringForType(unsafe { NSPasteboardTypeString })
         .map(|s| s.to_string())
+}
+
+/// A dropped file in a folder only the receiving app may read (the
+/// screenshot thumbnail's file lives in a protected TemporaryItems folder)
+/// is copied to the temp dir, so programs in the terminal, such as Claude
+/// Code, can open it. Other files keep their own path.
+fn readable_copy(path: &str) -> Option<String> {
+    if !is_protected(path) {
+        return None;
+    }
+    let src = PathBuf::from(path);
+    let ms = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_millis();
+    let dir = std::env::temp_dir().join(format!("odek-drop-{ms}"));
+    std::fs::create_dir_all(&dir).ok()?;
+    let dest = dir.join(src.file_name()?);
+    std::fs::copy(&src, &dest).ok()?;
+    Some(dest.to_string_lossy().into_owned())
+}
+
+fn is_protected(path: &str) -> bool {
+    path.contains("/TemporaryItems/")
 }
 
 /// Writes an item's PNG or TIFF data to a fresh PNG file.
@@ -139,11 +161,15 @@ pub fn quote(path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::quote;
+    use super::{is_protected, quote};
 
     #[test]
     fn quotes_shell_specials() {
         assert_eq!(quote("/tmp/a.png"), "/tmp/a.png");
+        assert!(is_protected(
+            "/var/folders/qx/x/T/TemporaryItems/NSIRD_screencaptureui_ab/Screenshot 1.png"
+        ));
+        assert!(!is_protected("/Users/me/Desktop/Screenshot 1.png"));
         assert_eq!(
             quote("/Users/me/Screen Shot (1).png"),
             "/Users/me/Screen\\ Shot\\ \\(1\\).png"

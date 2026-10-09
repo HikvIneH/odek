@@ -402,6 +402,8 @@ impl TermApp {
         window.setTabbingMode(objc2_app_kit::NSWindowTabbingMode::Disallowed);
         window.setDelegate(Some(ProtocolObject::from_ref(self)));
         window.setContentMinSize(NSSize::new(200.0, 80.0));
+        // 8-bit buffers, as in the workspace window.
+        window.setColorSpace(Some(&objc2_app_kit::NSColorSpace::sRGBColorSpace()));
 
         let view = TermView::new(frame, mtm);
         window.setContentView(Some(&view));

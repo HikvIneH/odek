@@ -18,9 +18,10 @@
   <img alt="UI: AppKit" src="https://img.shields.io/badge/UI-AppKit-black.svg">
 </p>
 
-> **Status:** the terminal is under active development. It runs real shells
-> and full-screen programs such as Claude Code today (`odek --term`); grouped
-> tabs, split panes and session restore are next. The code viewer is complete.
+> **Status:** the terminal is under active development (`odek --term`). It
+> runs real shells and programs such as Claude Code, with grouped tabs, split
+> panes and session restore. Next: opening files from the terminal in the code
+> viewer. The code viewer itself is complete.
 
 ## Why
 
@@ -39,21 +40,26 @@ output a session produces.
 
 Working now:
 
+- **Tabs grouped by project** in a sidebar: search, drag to reorder or move between groups, rename, collapse; each tab shows its folder and a status dot (green while a program runs, orange when one rang the bell or sent a notification you haven't seen)
+- **Split panes**: side by side or stacked, as many as you like, with draggable dividers
+- **Comes back as you left it**: groups, tabs, splits and each pane's folder are restored on relaunch (the shells start fresh)
+- **Asks before ending work**: closing a pane, tab or the app asks first when a program such as Claude Code is still running
 - **Runs anything**: your login shell, `vim`, `htop`, and coding agents such as Claude Code, with 24-bit colour, synchronized output (no flicker), bracketed paste, mouse reporting and focus events
 - **Keys that agents expect**: Shift+Return for a newline, Shift+Tab, Option as Meta (Option+←/→ jump words), ⌘←/⌘→/⌘⌫ for line editing
 - **Unicode**: wide CJK characters, emoji with skin tones and joined sequences, combining accents
 - **Clean lines**: box-drawing and block characters are drawn as shapes, so borders and logos join without gaps in any font
 - **Nerd Font icons**: uses MesloLGS NF (or another Nerd Font) when installed, so prompt themes like powerlevel10k show their icons
 - **Scrollback** of 10,000 lines per shell (capped at 8 MB), selection by drag, double-click (word) and triple-click (line), copy and paste, ⌘K to clear
-- **Window titles** from the running program; Dock bounce on bell or notification when Odek is in the background
+- **Find** in scrollback (⌘F), smart-case, with every match highlighted
+- **Links**: ⌘-click URLs and file paths (`src/main.rs:42:7` too), including the hyperlinks Claude Code prints
+- **Input methods**: the emoji picker, accents, and Chinese/Japanese/Korean input
+- **Titles** from the running program (Claude Code shows its task there), the folder at a shell prompt; Dock bounce on bell or notification when Odek is in the background
 - **Light and dark** themes that follow the system
 
 Planned, in this order:
 
-1. **Workspace window**: a sidebar of tabs grouped by project, split panes, a status dot per tab (running, done, needs attention), and restoring tabs and folders on relaunch
-2. **Find** in scrollback (⌘F), **clickable links and file paths**, input methods and the emoji picker
-3. **Code viewer inside the window**: ⌘-click a file path to open it, ⌘P in the current pane's folder, a file-explorer toggle
-4. Command blocks for plain shells, settings, themes
+1. **Code viewer inside the window**: ⌘-click a file path to open it at the line, ⌘P in the current pane's folder, a file-explorer toggle
+2. Reflowing text when a pane is resized, command blocks for plain shells, settings, themes
 
 ## Code viewer
 
@@ -126,8 +132,8 @@ that opens straight into the terminal and leaves `Odek.app` alone.
 ## Usage
 
 ```sh
-odek --term             # terminal in your home folder
-odek --term ~/code/app  # terminal in a folder
+odek --term             # terminal: restores your tabs
+odek --term ~/code/app  # same, plus a new tab in that folder
 odek .                  # code viewer on the current folder
 odek src/main.go        # code viewer on a file; its folder becomes the project
 ```
@@ -145,7 +151,16 @@ defaults write com.hikvineh.odek terminalFont "JetBrains Mono"
 
 | Key | Action |
 |---|---|
-| ⌘N | New window in the current folder |
+| ⌘T | New tab in the current folder and group |
+| ⇧⌘N | New group |
+| ⌘D / ⇧⌘D | Split right / split down |
+| ⌘W / ⇧⌘W | Close pane / close tab |
+| ⌘1 … ⌘8, ⌘9 | Go to tab 1 … 8, last tab |
+| ⇧⌘] / ⇧⌘[ | Next / previous tab |
+| ⌘] / ⌘[ | Next / previous pane |
+| ⇧⌘R | Rename tab (empty name: follow the program's title) |
+| ⌘B, ⇧⌘F | Toggle sidebar, search tabs |
+| ⌘F, ⌘G / ⇧⌘G | Find in scrollback, next / previous match |
 | ⌘C / ⌘V | Copy selection / paste |
 | ⌘A | Select all, scrollback included |
 | ⌘K | Clear scrollback |
@@ -229,6 +244,10 @@ Terminal:
   frame, and a synchronized update is shown only when it is complete.
 - **No shell hooks**: the folder and program name of a shell come from the
   operating system (`proc_pidinfo`), not from scripts injected into your shell.
+- **Workspace**: a small model of groups, tabs and split trees, saved as an
+  indented text file in `~/Library/Application Support/Odek/workspace.txt`.
+  Inactive tabs keep running but are taken out of the window, so they cost
+  no drawing.
 
 Code viewer:
 
@@ -256,8 +275,10 @@ so UI changes can be checked without screen recording:
 ```sh
 cargo build --release --features selftest   # the self-tests are left out of normal builds
 
-# terminal: one step per line (wait, keys, resize, snap, mem, quit)
+# terminal: one step per line (wait, keys, resize, snap, mem, quit, find, …)
 scripts/termsnap.sh <out-dir> <start-dir> @steps.txt ['<command>']
+# the workspace window instead, with its own throwaway save file
+ODEK_TERM_WS=1 ODEK_WORKSPACE_FILE=/tmp/ws.txt scripts/termsnap.sh …
 
 # code viewer
 scripts/selftest.sh target/release/odek <project> <out-dir> <query> <file>...
@@ -277,13 +298,19 @@ The icon ("stanza": code lines set like verse) is drawn by
 
 ```
 src/main.rs          NSApplication setup; `--term` picks the terminal
-src/term/term.rs     terminal state machine (escape sequences → screen)
-src/term/grid.rs     cells, interned styles, capped scrollback
-src/term/session.rs  pty, shell process, reader and writer threads
-src/term/view.rs     terminal NSView: drawing, keys, mouse, selection
-src/term/input.rs    key, paste and mouse encoding
-src/term/boxdraw.rs  box-drawing and block characters as shapes
-src/term/app.rs      terminal windows, menus, scripted snapshot mode
+src/term/vt.rs        terminal state machine (escape sequences → screen)
+src/term/grid.rs      cells, interned styles, capped scrollback
+src/term/session.rs   pty, shell process, reader and writer threads
+src/term/view.rs      terminal NSView: drawing, keys, mouse, selection
+src/term/input.rs     key, paste and mouse encoding
+src/term/ime.rs       input methods (marked text, emoji picker)
+src/term/find.rs      search in scrollback; findbar.rs is its UI
+src/term/links.rs     URL and file path detection
+src/term/boxdraw.rs   box-drawing and block characters as shapes
+src/term/workspace.rs groups, tabs, split trees; save and restore
+src/term/window.rs    workspace window: sidebar, panes, dialogs
+src/term/sidebar.rs   grouped tab list; header.rs is the pane title strip
+src/term/app.rs       app delegate, menus, scripted snapshot mode
 src/app.rs           code viewer: window, tree, tabs, editor, quick open, menus
 src/tree.rs          lazy file tree model
 src/fuzzy.rs         file listing and nucleo ranking for ⌘P

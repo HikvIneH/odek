@@ -35,6 +35,8 @@ pub enum ViewEvent {
     /// Bell or desktop notification from the program.
     Attention(Option<String>),
     Exited(i32),
+    /// The view became first responder.
+    Focused,
 }
 
 thread_local! {
@@ -173,6 +175,7 @@ define_class!(
         #[unsafe(method(becomeFirstResponder))]
         fn become_first_responder(&self) -> bool {
             self.set_focused(true);
+            self.emit(ViewEvent::Focused);
             true
         }
 

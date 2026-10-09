@@ -168,6 +168,7 @@ impl TermApp {
                     }
                 }
                 ViewEvent::Exited(_) => window.close(),
+                ViewEvent::Focused => {}
             }
         });
         if let Err(e) = view.start(dir, command) {

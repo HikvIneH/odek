@@ -1076,6 +1076,8 @@ impl App {
         unsafe { window.setReleasedWhenClosed(false) };
         window.setTitle(&NSString::from_str(APP_NAME));
         window.setMinSize(NSSize::new(480.0, 300.0));
+        // sRGB: 8-bit window buffers instead of half-float (half the memory).
+        window.setColorSpace(Some(&objc2_app_kit::NSColorSpace::sRGBColorSpace()));
         window.center();
         window.setFrameAutosaveName(ns_string!("main"));
         window.setDelegate(Some(ProtocolObject::from_ref(self)));

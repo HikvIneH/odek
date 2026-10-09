@@ -99,6 +99,10 @@ impl Workbench {
         unsafe { window.setReleasedWhenClosed(false) };
         window.setTabbingMode(objc2_app_kit::NSWindowTabbingMode::Disallowed);
         window.setContentMinSize(NSSize::new(480.0, 240.0));
+        // sRGB keeps the window's buffers 8-bit. Left to itself macOS backs
+        // windows on wide-colour displays with half-float pixels, twice the
+        // memory: a maximized window holds three of them, ~43 MB each.
+        window.setColorSpace(Some(&objc2_app_kit::NSColorSpace::sRGBColorSpace()));
         window.setDelegate(Some(delegate));
         window.center();
         window.setFrameAutosaveName(&NSString::from_str("OdekWorkspace"));

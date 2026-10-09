@@ -10,7 +10,8 @@ use objc2::runtime::AnyObject;
 use objc2::{MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
     NSApplication, NSBackingStoreType, NSButton, NSControl, NSControlStateValueOn, NSFont, NSFontManager,
-    NSFontTraitMask, NSPopUpButton, NSTextAlignment, NSTextField, NSView, NSWindow, NSWindowStyleMask,
+    NSFontTraitMask, NSPopUpButton, NSSlider, NSTextAlignment, NSTextField, NSView, NSWindow,
+    NSWindowStyleMask,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString, NSUserDefaults};
 
@@ -23,10 +24,14 @@ const SIZE: &str = "terminalFontSize";
 const THEME: &str = "terminalTheme";
 const SCROLLBACK: &str = "terminalScrollback";
 const OPTION_META: &str = "optionAsMeta";
+const OPACITY: &str = "terminalOpacity";
+const BLUR: &str = "terminalBlur";
 
 const AUTOMATIC: &str = "Automatic (Nerd Font if installed)";
 const SIZES: std::ops::RangeInclusive<isize> = 9..=24;
 const SCROLLBACKS: [usize; 4] = [1_000, 5_000, 10_000, 50_000];
+/// Opacity in percent; below the minimum text gets hard to read.
+const OPACITY_RANGE: std::ops::RangeInclusive<isize> = 50..=100;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum ThemePref {
@@ -97,6 +102,21 @@ pub fn scrollback() -> usize {
         .unwrap_or(DEFAULT_SCROLLBACK)
 }
 
+/// Terminal background opacity, 0.5–1.0 (stored as a percentage).
+pub fn opacity() -> f64 {
+    let n = defaults().integerForKey(&key(OPACITY));
+    if OPACITY_RANGE.contains(&n) {
+        n as f64 / 100.0
+    } else {
+        1.0
+    }
+}
+
+/// Blur what's behind a translucent window (on unless turned off).
+pub fn blur() -> bool {
+    defaults().objectForKey(&key(BLUR)).is_none() || defaults().boolForKey(&key(BLUR))
+}
+
 pub fn option_as_meta() -> bool {
     defaults().objectForKey(&key(OPTION_META)).is_none() || defaults().boolForKey(&key(OPTION_META))
 }
@@ -115,6 +135,7 @@ fn apply_all() {
     for v in TermView::all() {
         v.apply_settings();
     }
+    super::app::appearance_changed();
 }
 
 /// Families of the installed fixed-pitch fonts, sorted.
@@ -154,7 +175,7 @@ const LABEL_W: f64 = 120.0;
 const MARGIN: f64 = 20.0;
 
 fn build(mtm: MainThreadMarker) -> Panel {
-    let height = 5.0 * ROW + 2.0 * MARGIN;
+    let height = 7.0 * ROW + 2.0 * MARGIN;
     let frame = NSRect::new(NSPoint::ZERO, NSSize::new(WIDTH, height));
     let window = unsafe {
         NSWindow::initWithContentRect_styleMask_backing_defer(
@@ -265,6 +286,56 @@ fn build(mtm: MainThreadMarker) -> Panel {
     );
     place("Scrollback", &scroll, 150.0);
 
+    // Opacity: a slider with the percentage beside it, applied while dragging.
+    let percent = NSTextField::labelWithString(&key(&opacity_title(opacity())), mtm);
+    let shown = percent.clone();
+    let t = Target::new(mtm, move |sender| {
+        if let Some(s) = sender.and_then(|s| s.downcast_ref::<NSSlider>()) {
+            let n = s.doubleValue().round() as isize;
+            defaults().setInteger_forKey(n, &key(OPACITY));
+            shown.setStringValue(&key(&opacity_title(n as f64 / 100.0)));
+            apply_all();
+        }
+    });
+    let slider = unsafe {
+        NSSlider::sliderWithValue_minValue_maxValue_target_action(
+            opacity() * 100.0,
+            *OPACITY_RANGE.start() as f64,
+            *OPACITY_RANGE.end() as f64,
+            Some(&t as &AnyObject),
+            Some(Target::action()),
+            mtm,
+        )
+    };
+    targets.push(t);
+    slider.setContinuous(true);
+    place("Opacity", &slider, 180.0);
+    // Same row as the slider: the fifth one.
+    let row_y = height - MARGIN - 5.0 * ROW + 4.0;
+    percent.setFrame(NSRect::new(
+        NSPoint::new(MARGIN + LABEL_W + 10.0 + 190.0, row_y + 3.0),
+        NSSize::new(60.0, 20.0),
+    ));
+    content.addSubview(&percent);
+
+    let t = Target::new(mtm, |sender| {
+        if let Some(b) = sender.and_then(|s| s.downcast_ref::<NSButton>()) {
+            defaults().setBool_forKey(b.state() == NSControlStateValueOn, &key(BLUR));
+            apply_all();
+        }
+    });
+    let blur_box = unsafe {
+        NSButton::checkboxWithTitle_target_action(
+            &key("Blur what's behind the window"),
+            Some(&t as &AnyObject),
+            Some(Target::action()),
+            mtm,
+        )
+    };
+    targets.push(t);
+    blur_box.setState(if blur() { NSControlStateValueOn } else { 0 });
+    place("", &blur_box, wide);
+
     let t = Target::new(mtm, |sender| {
         if let Some(b) = sender.and_then(|s| s.downcast_ref::<NSButton>()) {
             defaults().setBool_forKey(b.state() == NSControlStateValueOn, &key(OPTION_META));
@@ -292,6 +363,10 @@ fn build(mtm: MainThreadMarker) -> Panel {
     }
 }
 
+fn opacity_title(o: f64) -> String {
+    format!("{}%", (o * 100.0).round() as isize)
+}
+
 fn lines_title(n: usize) -> String {
     let s = n.to_string();
     let (head, tail) = s.split_at(s.len() - 3);
@@ -314,8 +389,8 @@ pub fn content_view() -> Option<Retained<NSView>> {
 pub fn set_raw(name: &str, value: &str) {
     let value = (!value.is_empty()).then_some(value);
     match (name, value.and_then(|v| v.parse::<isize>().ok())) {
-        (SIZE | SCROLLBACK, Some(n)) => defaults().setInteger_forKey(n, &key(name)),
-        (OPTION_META, _) => match value {
+        (SIZE | SCROLLBACK | OPACITY, Some(n)) => defaults().setInteger_forKey(n, &key(name)),
+        (OPTION_META | BLUR, _) => match value {
             Some(v) => defaults().setBool_forKey(v == "1", &key(name)),
             None => defaults().removeObjectForKey(&key(name)),
         },
@@ -342,5 +417,6 @@ mod tests {
         assert_eq!(ThemePref::parse("Dark"), ThemePref::Dark);
         assert_eq!(ThemePref::parse("junk"), ThemePref::System);
         assert_eq!(ThemePref::Light.name(), "Light");
+        assert_eq!(opacity_title(0.85), "85%");
     }
 }

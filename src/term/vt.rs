@@ -158,7 +158,7 @@ impl Term {
             dirty: vec![true; rows],
             all_dirty: true,
             report_fg: (0xE6, 0xED, 0xF3),
-            report_bg: (0x0D, 0x11, 0x17),
+            report_bg: (0x0B, 0x0F, 0x14),
             dec_graphics: false,
             last_char: None,
             join_next: false,
@@ -1479,7 +1479,7 @@ mod tests {
         let mut t = Term::new(10, 5);
         run(&mut t, b"\x1b[3;4H\x1b[6n\x1b[?2026$p\x1b]11;?\x07");
         let r = String::from_utf8(t.reply.clone()).unwrap();
-        assert_eq!(r, "\x1b[3;4R\x1b[?2026;2$y\x1b]11;rgb:0d0d/1111/1717\x07");
+        assert_eq!(r, "\x1b[3;4R\x1b[?2026;2$y\x1b]11;rgb:0b0b/0f0f/1414\x07");
     }
 
     #[test]

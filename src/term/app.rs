@@ -611,6 +611,15 @@ pub fn reveal_pane(pane: Option<super::workspace::Id>) {
     }
 }
 
+/// Settings changed: window-level appearance (opacity, blur).
+pub fn appearance_changed() {
+    if let Some(app) = instance()
+        && let Some(b) = app.ivars().bench.get()
+    {
+        b.apply_appearance();
+    }
+}
+
 /// Every second, on the main thread: refresh folders and status, save.
 fn tick() {
     if let Some(app) = instance()

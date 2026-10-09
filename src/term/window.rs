@@ -15,12 +15,14 @@ use objc2::runtime::ProtocolObject;
 use objc2::{MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
     NSAlert, NSAlertFirstButtonReturn, NSApplication, NSAutoresizingMaskOptions, NSBackingStoreType,
-    NSButton, NSImage, NSMenu, NSMenuItem, NSModalResponse, NSRequestUserAttentionType, NSSplitView,
-    NSSplitViewDividerStyle, NSTextField, NSView, NSWindow, NSWindowDelegate, NSWindowStyleMask,
+    NSButton, NSColor, NSImage, NSMenu, NSMenuItem, NSModalResponse, NSRequestUserAttentionType, NSSplitView,
+    NSSplitViewDividerStyle, NSTextField, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
+    NSVisualEffectState, NSVisualEffectView, NSWindow, NSWindowDelegate, NSWindowStyleMask,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
 use super::header::PaneHeader;
+use super::settings;
 use super::sidebar::{Row, RowKey, Sidebar, SidebarEvent};
 use super::target::Target;
 use super::view::{TermView, ViewEvent};
@@ -64,6 +66,8 @@ pub struct Workbench {
     mtm: MainThreadMarker,
     me: Weak<Workbench>,
     pub window: Retained<NSWindow>,
+    /// Behind everything: blurs the desktop when the terminals are translucent.
+    blur: Retained<NSVisualEffectView>,
     split: Retained<NSSplitView>,
     sidebar: Sidebar,
     content: Retained<NSView>,
@@ -120,7 +124,19 @@ impl Workbench {
         );
         split.addSubview(&sidebar.view);
         split.addSubview(&content);
-        window.setContentView(Some(&split));
+        let blur = NSVisualEffectView::initWithFrame(NSVisualEffectView::alloc(mtm), bounds);
+        blur.setMaterial(NSVisualEffectMaterial::UnderWindowBackground);
+        blur.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
+        blur.setState(NSVisualEffectState::Active);
+        blur.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
+        );
+        // The blur sits behind the panes as a sibling, so hiding it (opaque
+        // windows) never hides them.
+        let root = NSView::initWithFrame(NSView::alloc(mtm), bounds);
+        root.addSubview(&blur);
+        root.addSubview(&split);
+        window.setContentView(Some(&root));
         split.adjustSubviews();
         split.setPosition_ofDividerAtIndex(SIDEBAR_W, 0);
         split.setHoldingPriority_forSubviewAtIndex(260.0, 0);
@@ -129,6 +145,7 @@ impl Workbench {
             mtm,
             me: me.clone(),
             window,
+            blur,
             split,
             sidebar,
             content,
@@ -140,6 +157,7 @@ impl Workbench {
             last_saved: RefCell::new(String::new()),
             viewer: RefCell::new(None),
         });
+        bench.apply_appearance();
         let (w1, w2) = (bench.me.clone(), bench.me.clone());
         bench.sidebar.set_handlers(
             move |e| {
@@ -1040,6 +1058,21 @@ impl Workbench {
             b.refresh();
             b.save();
         });
+    }
+
+    /// Opacity and blur from settings: a translucent window shows the
+    /// desktop (blurred, or not) through the terminals.
+    pub fn apply_appearance(&self) {
+        let opacity = settings::opacity();
+        let clear = opacity < 1.0;
+        self.window.setOpaque(!clear);
+        let bg = if clear {
+            NSColor::clearColor()
+        } else {
+            NSColor::windowBackgroundColor()
+        };
+        self.window.setBackgroundColor(Some(&bg));
+        self.blur.setHidden(!(clear && settings::blur()));
     }
 
     // ---- code viewer ----

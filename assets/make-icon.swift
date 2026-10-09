@@ -1,59 +1,28 @@
-// Draws the Odek app icon ("stanza": lines of code set like verse).
-// Usage: swift assets/make-icon.swift <out.png> [pixels] [full|small32|small16]
-// Small variants drop detail so the mark still reads at 16 and 32 px.
+// Generates odek app icon (1024) — chevron prompt + cursor on dark tile.
+// swift make-icon.swift && iconutil -c icns odek.iconset
 import AppKit
-
-let args = CommandLine.arguments
-let out = args.count > 1 ? args[1] : "icon-1024.png"
-let px = args.count > 2 ? Int(args[2])! : 1024
-let variant = args.count > 3 ? args[3] : "full"
-
-let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: px, pixelsHigh: px,
-                           bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-                           colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
-NSGraphicsContext.saveGraphicsState()
-NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-
-func rgb(_ hex: UInt32, _ a: CGFloat = 1) -> NSColor {
-    NSColor(srgbRed: CGFloat((hex >> 16) & 0xFF) / 255, green: CGFloat((hex >> 8) & 0xFF) / 255,
-            blue: CGFloat(hex & 0xFF) / 255, alpha: a)
+let S: CGFloat = 1024
+let img = NSImage(size: NSSize(width: S, height: S))
+img.lockFocus()
+let ctx = NSGraphicsContext.current!.cgContext
+ctx.translateBy(x: 0, y: S); ctx.scaleBy(x: 1, y: -1) // top-left origin
+func hex(_ h: UInt32) -> CGColor { CGColor(red: CGFloat((h>>16)&255)/255, green: CGFloat((h>>8)&255)/255, blue: CGFloat(h&255)/255, alpha: 1) }
+let bg = hex(0x0B0F14), fg = hex(0xE6EDF3), accent = hex(0x3B82F6)
+ctx.setFillColor(bg)
+ctx.addPath(CGPath(roundedRect: CGRect(x: 0, y: 0, width: S, height: S), cornerWidth: 230, cornerHeight: 230, transform: nil)); ctx.fillPath()
+let k: CGFloat = S/160
+let bw = 40*k, bh = 13*k, cx = 44*k
+func bar(cy: CGFloat, angle: CGFloat, color: CGColor) {
+  ctx.saveGState(); ctx.translateBy(x: cx, y: cy); ctx.rotate(by: angle)
+  ctx.setFillColor(color)
+  ctx.addPath(CGPath(roundedRect: CGRect(x: 0, y: -bh/2, width: bw, height: bh), cornerWidth: bh/2, cornerHeight: bh/2, transform: nil)); ctx.fillPath()
+  ctx.restoreGState()
 }
-
-// Artwork is designed on a 100-unit grid where the tile spans 4…96, y down.
-// That tile maps to the macOS icon grid: an 824 px tile inset 100 px in 1024.
-let k = CGFloat(px) / 1024
-func box(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat) -> NSRect {
-    let s = 824.0 / 92.0 * k
-    return NSRect(x: (100 * k) + (x - 4) * s, y: CGFloat(px) - ((100 * k) + (y - 4 + h) * s), width: w * s, height: h * s)
-}
-
-let ink = rgb(0x241812), crema = rgb(0xC9792F)
-rgb(0xF1E7DA).setFill()
-NSBezierPath(roundedRect: box(4, 4, 92, 92), xRadius: 185 * k, yRadius: 185 * k).fill()
-
-func bar(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat, _ color: NSColor) {
-    let r = box(x, y, w, h)
-    color.setFill()
-    NSBezierPath(roundedRect: r, xRadius: r.height / 2, yRadius: r.height / 2).fill()
-}
-
-switch variant {
-case "small16":
-    bar(20, 24, 56, 14, ink)
-    bar(20, 58, 34, 14, crema)
-case "small32":
-    bar(20, 26, 52, 10, ink)
-    bar(30, 45, 40, 10, ink.withAlphaComponent(0.55))
-    bar(20, 64, 28, 10, crema)
-default:
-    bar(22, 27, 48, 7, ink)
-    bar(30, 40, 36, 7, ink.withAlphaComponent(0.55))
-    bar(30, 53, 44, 7, ink.withAlphaComponent(0.55))
-    bar(22, 66, 24, 7, crema)
-    crema.setFill()
-    NSBezierPath(ovalIn: box(50.5, 66, 7, 7)).fill()
-}
-
-NSGraphicsContext.restoreGraphicsState()
-try! rep.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: out))
-print("wrote \(out) (\(px) px, \(variant))")
+bar(cy: 57.5*k, angle: .pi/4, color: fg)
+bar(cy: 102.5*k, angle: -.pi/4, color: fg)
+ctx.setFillColor(accent)
+ctx.addPath(CGPath(roundedRect: CGRect(x: 88*k, y: 92*k, width: 30*k, height: 13*k), cornerWidth: 6.5*k, cornerHeight: 6.5*k, transform: nil)); ctx.fillPath()
+img.unlockFocus()
+let png = NSBitmapImageRep(data: img.tiffRepresentation!)!.representation(using: .png, properties: [:])!
+try! png.write(to: URL(fileURLWithPath: "icon-1024.png"))
+print("wrote icon-1024.png")

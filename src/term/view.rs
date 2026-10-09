@@ -4,11 +4,12 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use dispatch2::DispatchQueue;
+use objc2::AnyThread;
 use objc2::rc::{Retained, Weak};
 use objc2::runtime::{AnyObject, NSObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
@@ -16,12 +17,13 @@ use objc2_app_kit::{
     NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSBezierPath, NSColor, NSCursor, NSEvent, NSEventModifierFlags,
     NSFont, NSFontAttributeName, NSFontManager, NSFontTraitMask, NSFontWeightRegular,
     NSForegroundColorAttributeName, NSPasteboard, NSPasteboardTypeString, NSResponder, NSStrikethroughStyleAttributeName,
-    NSStringDrawing, NSUnderlineStyleAttributeName, NSView,
+    NSStringDrawing, NSTrackingArea, NSTrackingAreaOptions, NSUnderlineStyleAttributeName, NSView, NSWorkspace,
 };
-use objc2_foundation::{NSArray, NSDictionary, NSNumber, NSPoint, NSRect, NSSize, NSString, NSUserDefaults};
+use objc2_foundation::{NSArray, NSDictionary, NSNumber, NSPoint, NSRect, NSSize, NSString, NSURL, NSUserDefaults};
 
 use super::grid::{Cell as GCell, Color, Line, Style, attr, flag};
 use super::input::{self, Mods};
+use super::links::{self, Target};
 use super::session::{Session, Spawn};
 use super::term::{CursorShape, Event, MouseMode, Term};
 
@@ -35,6 +37,8 @@ pub enum ViewEvent {
     /// Bell or desktop notification from the program.
     Attention(Option<String>),
     Exited(i32),
+    /// A file path was ⌘-clicked; it exists. The owner decides how to open it.
+    OpenPath { path: PathBuf, line: Option<u32>, col: Option<u32> },
 }
 
 thread_local! {
@@ -47,6 +51,16 @@ struct Pos {
     /// Stable line id (see `Term::first_id`).
     line: u64,
     col: usize,
+}
+
+#[derive(Default)]
+struct Hover {
+    /// Cell under the mouse (line id, col) while ⌘ is held.
+    key: Option<(u64, usize)>,
+    /// The link under it: line id and cell range, underlined.
+    span: Option<(u64, usize, usize)>,
+    /// ⌘-click opened a link; ignore the rest of that click.
+    swallow: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -146,6 +160,7 @@ pub struct Ivars {
     focused: Cell<bool>,
     cursor_row: Cell<usize>,
     exited: Cell<bool>,
+    hover: RefCell<Hover>,
 }
 
 define_class!(
@@ -201,6 +216,24 @@ define_class!(
         #[unsafe(method(resetCursorRects))]
         fn reset_cursor_rects(&self) {
             self.addCursorRect_cursor(self.bounds(), &NSCursor::IBeamCursor());
+        }
+
+        #[unsafe(method(mouseMoved:))]
+        fn mouse_moved(&self, event: &NSEvent) {
+            self.update_hover(self.local_point(event), event.modifierFlags().contains(NSEventModifierFlags::Command));
+        }
+
+        #[unsafe(method(mouseExited:))]
+        fn mouse_exited(&self, _event: &NSEvent) {
+            self.set_hover(None);
+        }
+
+        #[unsafe(method(flagsChanged:))]
+        fn flags_changed(&self, event: &NSEvent) {
+            if let Some(w) = self.window() {
+                let p = self.convertPoint_fromView(w.mouseLocationOutsideOfEventStream(), None);
+                self.update_hover(p, event.modifierFlags().contains(NSEventModifierFlags::Command));
+            }
         }
 
         #[unsafe(method(keyDown:))]
@@ -301,10 +334,19 @@ impl TermView {
             focused: Cell::new(false),
             cursor_row: Cell::new(0),
             exited: Cell::new(false),
+            hover: RefCell::new(Hover::default()),
         });
         let this: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame] };
         VIEWS.with(|v| v.borrow_mut().insert(id, Weak::from_retained(&this)));
         this.update_theme();
+        let opts = NSTrackingAreaOptions::MouseMoved
+            | NSTrackingAreaOptions::MouseEnteredAndExited
+            | NSTrackingAreaOptions::ActiveInKeyWindow
+            | NSTrackingAreaOptions::InVisibleRect;
+        let area = unsafe {
+            NSTrackingArea::initWithRect_options_owner_userInfo(NSTrackingArea::alloc(), NSRect::ZERO, opts, Some(&*this), None)
+        };
+        this.addTrackingArea(&area);
         this
     }
 
@@ -596,6 +638,11 @@ impl TermView {
                 })
             });
             self.draw_line(&t, t.line(idx), PAD_Y + r as f64 * m.ch, span);
+            if let Some((l, a, b)) = self.ivars().hover.borrow().span
+                && l == id
+            {
+                self.draw_link_underline(&t, t.line(idx), (a, b), PAD_Y + r as f64 * m.ch);
+            }
         }
         let live = top + t.rows == t.total_lines();
         if live && t.modes.show_cursor && !self.ivars().exited.get() {
@@ -670,6 +717,14 @@ impl TermView {
             let attrs = self.attrs_for(cell.style, &style);
             unsafe { NSString::from_str(&buf).drawAtPoint_withAttributes(NSPoint::new(x, y), Some(&attrs)) };
         }
+    }
+
+    fn draw_link_underline(&self, t: &Term, line: &Line, (a, b): (usize, usize), y: f64) {
+        let m = self.ivars().metrics.get();
+        let (fg, _) = self.theme().resolve(&t.styles.get(line.cells.get(a).map_or(0, |c| c.style)));
+        self.color(fg).setFill();
+        let r = cell_rect(m, a, b - a, y + m.ch - 2.0);
+        NSBezierPath::fillRect(NSRect::new(r.origin, NSSize::new(r.size.width, 1.0)));
     }
 
     fn draw_cursor(&self, t: &Term, m: Metrics) {
@@ -871,6 +926,9 @@ impl TermView {
     fn handle_mouse(&self, event: &NSEvent, kind: MouseKind) {
         let p = self.local_point(event);
         let flags = event.modifierFlags();
+        if self.link_click(p, flags.contains(NSEventModifierFlags::Command), kind) {
+            return;
+        }
         let Some((mouse, sgr)) = self.with_term(|t| (t.modes.mouse, t.modes.mouse_sgr)) else {
             return;
         };
@@ -937,6 +995,143 @@ impl TermView {
             }
         }
         self.setNeedsDisplay(true);
+    }
+
+    // ---- links ----
+
+    /// (line id, col) of the cell under a point, if inside the grid.
+    fn hover_cell(&self, p: NSPoint) -> Option<(u64, usize)> {
+        let m = self.ivars().metrics.get();
+        let (cols, rows, first, top) = self.with_term(|t| (t.cols, t.rows, t.first_id(), self.top_index(t)))?;
+        let (x, y) = (p.x - PAD_X, p.y - PAD_Y);
+        if x < 0.0 || y < 0.0 {
+            return None;
+        }
+        let (col, row) = ((x / m.cw) as usize, (y / m.ch) as usize);
+        (col < cols && row < rows).then_some((first + (top + row) as u64, col))
+    }
+
+    /// The link at a cell: OSC 8 first, else detected in the line's text.
+    fn link_at(&self, line: u64, col: usize) -> Option<(usize, usize, Target)> {
+        let found = self.with_term(|t| {
+            let idx = line.checked_sub(t.first_id())? as usize;
+            if idx >= t.total_lines() {
+                return None;
+            }
+            let line = t.line(idx);
+            let id = t.styles.get(line.cells.get(col)?.style).link;
+            if id == 0 {
+                return links::detect(&line_chars(t, line), col);
+            }
+            let same = |c: usize| t.styles.get(line.cells[c].style).link == id;
+            let (mut a, mut b) = (col, col + 1);
+            while a > 0 && same(a - 1) {
+                a -= 1;
+            }
+            while b < line.cells.len() && same(b) {
+                b += 1;
+            }
+            Some((a, b, Target::Url(t.link(id)?.to_string())))
+        })??;
+        // Only paths that exist count, so hover never promises a dead link.
+        match &found.2 {
+            Target::Path { path, .. } => self.resolve_path(path).map(|_| found),
+            Target::Url(_) => Some(found),
+        }
+    }
+
+    fn resolve_path(&self, path: &str) -> Option<PathBuf> {
+        let p = match path.strip_prefix("~/") {
+            Some(rest) => PathBuf::from(std::env::var_os("HOME")?).join(rest),
+            None => PathBuf::from(path),
+        };
+        let p = if p.is_absolute() { p } else { self.session_cwd()?.join(p) };
+        p.exists().then_some(p)
+    }
+
+    fn update_hover(&self, p: NSPoint, cmd: bool) {
+        self.set_hover(if cmd { self.hover_cell(p) } else { None });
+    }
+
+    fn set_hover(&self, key: Option<(u64, usize)>) {
+        if self.ivars().hover.borrow().key == key {
+            return;
+        }
+        let span = key.and_then(|(l, c)| self.link_at(l, c).map(|(a, b, _)| (l, a, b)));
+        let old = {
+            let mut h = self.ivars().hover.borrow_mut();
+            h.key = key;
+            std::mem::replace(&mut h.span, span)
+        };
+        if old.is_some() != span.is_some() {
+            let cursor = if span.is_some() { NSCursor::pointingHandCursor() } else { NSCursor::IBeamCursor() };
+            cursor.set();
+        }
+        for (l, ..) in old.into_iter().chain(span) {
+            self.invalidate_line(l);
+        }
+    }
+
+    fn invalidate_line(&self, id: u64) {
+        let Some(row) = self.with_term(|t| id.checked_sub(t.first_id() + self.top_index(t) as u64)) else { return };
+        let Some(row) = row else { return };
+        let m = self.ivars().metrics.get();
+        self.setNeedsDisplayInRect(NSRect::new(
+            NSPoint::new(0.0, PAD_Y + row as f64 * m.ch),
+            NSSize::new(self.bounds().size.width, m.ch),
+        ));
+    }
+
+    /// ⌘-click on a link opens it instead of selecting. True if the event was consumed.
+    fn link_click(&self, p: NSPoint, cmd: bool, kind: MouseKind) -> bool {
+        if kind != MouseKind::Down {
+            let mut h = self.ivars().hover.borrow_mut();
+            let swallow = h.swallow;
+            h.swallow &= kind != MouseKind::Up;
+            return swallow;
+        }
+        self.ivars().hover.borrow_mut().swallow = false;
+        if !cmd {
+            return false;
+        }
+        let Some((line, col)) = self.hover_cell(p) else { return false };
+        let Some((_, _, target)) = self.link_at(line, col) else { return false };
+        self.ivars().hover.borrow_mut().swallow = true;
+        self.open_target(target);
+        true
+    }
+
+    fn open_target(&self, target: Target) {
+        match target {
+            Target::Url(u) => {
+                let Some(url) = NSURL::URLWithString(&NSString::from_str(&u)) else { return };
+                if url.isFileURL() {
+                    if let Some(path) = url.path() {
+                        self.open_path(&path.to_string(), None, None);
+                    }
+                } else {
+                    NSWorkspace::sharedWorkspace().openURL(&url);
+                }
+            }
+            Target::Path { path, line, col } => self.open_path(&path, line, col),
+        }
+    }
+
+    fn open_path(&self, path: &str, line: Option<u32>, col: Option<u32>) {
+        if let Some(path) = self.resolve_path(path) {
+            self.emit(ViewEvent::OpenPath { path, line, col });
+        }
+    }
+
+    /// Selftest: describe the link at a cell, optionally showing the ⌘-hover underline.
+    #[cfg(feature = "selftest")]
+    pub fn probe_link(&self, col: usize, row: usize, hover: bool) -> String {
+        let key = self.with_term(|t| (t.first_id() + (self.top_index(t) + row) as u64, col));
+        let found = key.and_then(|(l, c)| self.link_at(l, c));
+        if hover {
+            self.set_hover(key);
+        }
+        format!("{found:?}")
     }
 
     fn line_span(&self, pos: Pos) -> (Pos, Pos) {

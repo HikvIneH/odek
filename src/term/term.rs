@@ -1,6 +1,8 @@
 //! The terminal state machine: `vte` parses bytes, `Term` applies them to the
 //! grid. No AppKit here, so it is tested headless.
 
+use std::collections::HashMap;
+
 use unicode_width::UnicodeWidthChar;
 use vte::{Params, Perform};
 
@@ -98,6 +100,8 @@ pub struct Term {
     pub history: History,
     pub styles: Styles,
     pub clusters: Clusters,
+    links: Vec<Box<str>>,
+    link_map: HashMap<Box<str>, u16>,
     cursor: Cursor,
     saved_main: Saved,
     saved_alt: Saved,
@@ -135,6 +139,8 @@ impl Term {
             history: History::new(DEFAULT_SCROLLBACK, DEFAULT_SCROLLBACK_BYTES),
             styles: Styles::default(),
             clusters: Clusters::default(),
+            links: Vec::new(),
+            link_map: HashMap::new(),
             cursor: Cursor::default(),
             saved_main: Saved::default(),
             saved_alt: Saved::default(),
@@ -204,7 +210,26 @@ impl Term {
 
     /// Bytes held by this terminal's grids, scrollback and tables.
     pub fn mem_bytes(&self) -> usize {
-        self.main.bytes() + self.alt.bytes() + self.history.bytes() + self.clusters.bytes() + self.styles.len() * 24
+        self.main.bytes() + self.alt.bytes() + self.history.bytes() + self.clusters.bytes() + self.styles.len() * 24 + self.links.iter().map(|l| l.len() * 2 + 48).sum::<usize>()
+    }
+
+    /// Target of an OSC 8 hyperlink id (see `Style::link`).
+    pub fn link(&self, id: u16) -> Option<&str> {
+        self.links.get((id as usize).checked_sub(1)?).map(|s| &**s)
+    }
+
+    fn intern_link(&mut self, uri: &str) -> u16 {
+        if let Some(&i) = self.link_map.get(uri) {
+            return i;
+        }
+        // Bounded so a program can't grow the table without limit.
+        if uri.len() > MAX_LINK_LEN || self.links.len() >= MAX_LINKS {
+            return 0;
+        }
+        self.links.push(uri.into());
+        let i = self.links.len() as u16;
+        self.link_map.insert(uri.into(), i);
+        i
     }
 
     pub fn take_dirty(&mut self) -> (bool, Vec<bool>) {
@@ -290,7 +315,7 @@ impl Term {
         if pen.bg == Color::Default {
             Cell::BLANK
         } else {
-            Cell::blank(self.styles.intern(Style { fg: Color::Default, bg: pen.bg, attrs: 0 }))
+            Cell::blank(self.styles.intern(Style { bg: pen.bg, ..Style::default() }))
         }
     }
 
@@ -661,6 +686,8 @@ impl Term {
                 _ => {}
             }
         }
+        // SGR never touches the hyperlink; OSC 8 owns it.
+        pen.link = self.cursor.pen.link;
         self.cursor.pen = pen;
     }
 
@@ -987,6 +1014,11 @@ impl Perform for Term {
             }
             b"10" if params.get(1) == Some(&&b"?"[..]) => self.osc_color_reply(10, self.report_fg, bell),
             b"11" if params.get(1) == Some(&&b"?"[..]) => self.osc_color_reply(11, self.report_bg, bell),
+            b"8" => {
+                // The URI may contain ';', which vte splits on.
+                let uri = params.get(2..).map(|p| p.iter().map(|p| String::from_utf8_lossy(p)).collect::<Vec<_>>().join(";"));
+                self.cursor.pen.link = uri.filter(|u| !u.is_empty()).map_or(0, |u| self.intern_link(&u));
+            }
             b"52" => {
                 if let Some(data) = params.get(2).filter(|d| **d != b"?")
                     && let Some(bytes) = base64_decode(data)
@@ -998,6 +1030,9 @@ impl Perform for Term {
         }
     }
 }
+
+const MAX_LINKS: usize = 4096;
+const MAX_LINK_LEN: usize = 2048;
 
 fn is_emoji_modifier(c: char) -> bool {
     ('\u{1F3FB}'..='\u{1F3FF}').contains(&c)
@@ -1104,6 +1139,33 @@ mod tests {
 
     fn screen(t: &Term) -> Vec<String> {
         t.screen_text().lines().map(str::to_string).collect()
+    }
+
+    #[test]
+    fn osc8_links_style_cells() {
+        let mut t = Term::new(20, 2);
+        run(&mut t, b"a\x1b]8;id=1;https://x.io/a;b\x1b\\bc\x1b[1m\x1b[0md\x1b]8;;\x1b\\e");
+        let id = |c: usize| t.styles.get(t.grid().lines[0].cells[c].style).link;
+        assert_eq!(id(0), 0);
+        assert_ne!(id(1), 0);
+        assert_eq!(id(1), id(2));
+        // SGR 0 keeps the link, bold or not.
+        assert_eq!(id(3), id(1));
+        assert_eq!(id(4), 0);
+        assert_eq!(t.link(id(1)), Some("https://x.io/a;b"));
+        assert_eq!(t.link(0), None);
+    }
+
+    #[test]
+    fn osc8_table_is_bounded_and_deduped() {
+        let mut t = Term::new(20, 2);
+        run(&mut t, b"\x1b]8;;u\x1b\\x\x1b]8;;u\x1b\\y");
+        assert_eq!(t.links.len(), 1);
+        for i in 0..MAX_LINKS + 10 {
+            run(&mut t, format!("\x1b]8;;http://h/{i}\x1b\\").as_bytes());
+        }
+        assert_eq!(t.links.len(), MAX_LINKS);
+        assert_eq!(t.cursor.pen.link, 0);
     }
 
     #[test]

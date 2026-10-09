@@ -15,10 +15,11 @@ use objc2::runtime::{AnyObject, NSObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
 use objc2_app_kit::{
     NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSBezierPath, NSColor,
-    NSCursor, NSEvent, NSEventModifierFlags, NSFont, NSFontAttributeName, NSFontManager, NSFontTraitMask,
-    NSFontWeightRegular, NSForegroundColorAttributeName, NSPasteboard, NSPasteboardTypeString, NSResponder,
-    NSStrikethroughStyleAttributeName, NSStringDrawing, NSTextInputClient, NSTrackingArea,
-    NSTrackingAreaOptions, NSUnderlineStyleAttributeName, NSView, NSWorkspace,
+    NSCompositingOperation, NSCursor, NSEvent, NSEventModifierFlags, NSFont, NSFontAttributeName,
+    NSFontManager, NSFontTraitMask, NSFontWeightRegular, NSForegroundColorAttributeName, NSPasteboard,
+    NSPasteboardTypeString, NSRectFillUsingOperation, NSResponder, NSStrikethroughStyleAttributeName,
+    NSStringDrawing, NSTextInputClient, NSTrackingArea, NSTrackingAreaOptions, NSUnderlineStyleAttributeName,
+    NSView, NSWorkspace,
 };
 use objc2_foundation::{
     NSArray, NSDictionary, NSNumber, NSPoint, NSRange, NSRangePointer, NSRect, NSSize, NSString, NSUInteger,
@@ -177,6 +178,8 @@ pub struct Ivars {
     focused: Cell<bool>,
     cursor_row: Cell<usize>,
     exited: Cell<bool>,
+    /// Background opacity from settings; below 1 the view isn't opaque.
+    opacity: Cell<f64>,
     pub(super) find: RefCell<Option<FindState>>,
     hover: RefCell<Hover>,
     ime: Ime,
@@ -196,7 +199,7 @@ define_class!(
 
         #[unsafe(method(isOpaque))]
         fn is_opaque(&self) -> bool {
-            true
+            self.ivars().opacity.get() >= 1.0
         }
 
         #[unsafe(method(acceptsFirstResponder))]
@@ -435,6 +438,7 @@ impl TermView {
             focused: Cell::new(false),
             cursor_row: Cell::new(0),
             exited: Cell::new(false),
+            opacity: Cell::new(settings::opacity()),
             find: RefCell::new(None),
             hover: RefCell::new(Hover::default()),
             ime: Ime::default(),
@@ -554,6 +558,7 @@ impl TermView {
 
     /// Re-read the saved font, size, theme and scrollback.
     pub fn apply_settings(&self) {
+        self.ivars().opacity.set(settings::opacity());
         self.update_theme();
         self.set_font_size(settings::font_size());
         self.with_term_mut(settings::apply_scrollback);
@@ -773,8 +778,16 @@ impl TermView {
 
     fn draw(&self, dirty: NSRect) {
         let theme = self.theme();
-        self.color(theme.bg).setFill();
-        NSBezierPath::fillRect(dirty);
+        // Copy, not blend: with opacity below 1 the background's alpha must
+        // replace what was drawn before, not pile up.
+        let opacity = self.ivars().opacity.get();
+        let bg = self.color(theme.bg);
+        if opacity < 1.0 {
+            bg.colorWithAlphaComponent(opacity).setFill();
+        } else {
+            bg.setFill();
+        }
+        NSRectFillUsingOperation(dirty, NSCompositingOperation::Copy);
         let session = self.ivars().session.borrow();
         let Some(s) = session.as_ref() else { return };
         let t = s.term.lock().unwrap();

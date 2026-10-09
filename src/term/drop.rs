@@ -48,7 +48,11 @@ pub fn receive_promises(pb: &NSPasteboard, typed: impl Fn(String) + 'static) -> 
     if promises.is_empty() {
         return false;
     }
-    let Some(ms) = SystemTime::now().duration_since(UNIX_EPOCH).ok().map(|d| d.as_millis()) else {
+    let Some(ms) = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_millis())
+    else {
         return false;
     };
     let dir = std::env::temp_dir().join(format!("odek-drop-{ms}"));

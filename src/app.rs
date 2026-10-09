@@ -1589,6 +1589,13 @@ impl App {
             && let Some(path) = panel.URLs().firstObject().and_then(|u| u.to_file_path())
         {
             self.open_path(&path);
+            // In a pane the file tree starts hidden; show what was opened.
+            if self.ui().window.is_none() {
+                let ui = self.ui();
+                let side = ui.split.subviews().objectAtIndex(0);
+                side.setHidden(false);
+                ui.split.adjustSubviews();
+            }
         }
     }
 

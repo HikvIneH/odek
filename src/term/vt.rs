@@ -885,11 +885,9 @@ impl Perform for Term {
                             self.erase_cells(r, 0, self.cols);
                         }
                     }
-                    3 => {
-                        if !self.alt_active {
-                            self.history.clear();
-                            self.all_dirty = true;
-                        }
+                    3 if !self.alt_active => {
+                        self.history.clear();
+                        self.all_dirty = true;
                     }
                     _ => {}
                 }
@@ -1010,11 +1008,9 @@ impl Perform for Term {
                 let s = format!("\x1b[{q}{m};{state}$y");
                 self.reply.extend_from_slice(s.as_bytes());
             }
-            ([], 't') => {
-                if ps.first() == Some(&18) {
-                    let s = format!("\x1b[8;{};{}t", self.rows, self.cols);
-                    self.reply.extend_from_slice(s.as_bytes());
-                }
+            ([], 't') if ps.first() == Some(&18) => {
+                let s = format!("\x1b[8;{};{}t", self.rows, self.cols);
+                self.reply.extend_from_slice(s.as_bytes());
             }
             _ => {}
         }

@@ -68,6 +68,7 @@ define_class!(
                 bench.open_path(&path);
             }
             let _ = self.ivars().bench.set(bench);
+            super::notify::setup();
             tick();
             app.activate();
         }
@@ -235,6 +236,15 @@ define_class!(
         fn menu_new_window(&self, _sender: Option<&AnyObject>) {
             let dir = self.key_view().and_then(|v| v.session_cwd()).unwrap_or_else(|| self.ivars().start_dir.clone());
             self.open_window(&dir, None, true);
+        }
+
+        #[unsafe(method(termToggleNotify:))]
+        fn menu_toggle_notify(&self, sender: Option<&NSMenuItem>) {
+            let on = !super::notify::enabled();
+            super::notify::set_enabled(on);
+            if let Some(item) = sender {
+                item.setState(if on { NSControlStateValueOn } else { 0 });
+            }
         }
 
         #[unsafe(method(termZoomIn:))]
@@ -436,6 +446,15 @@ impl TermApp {
         if NSUserDefaults::standardUserDefaults().boolForKey(&NSString::from_str("vimMode")) {
             vim.setState(NSControlStateValueOn);
         }
+        let notify = item(
+            "Notify When a Background Tab Needs Attention",
+            Some(sel!(termToggleNotify:)),
+            "",
+            cmd,
+        );
+        if super::notify::enabled() {
+            notify.setState(NSControlStateValueOn);
+        }
         let next_file = item("Next File", Some(sel!(appNextTab:)), "\t", ctrl);
         let prev_file = item("Previous File", Some(sel!(appPrevTab:)), "\t", ctrl | shift);
         let bar = NSMenu::new(mtm);
@@ -528,6 +547,7 @@ impl TermApp {
                     sep(),
                     item("Toggle Word Wrap", Some(sel!(appToggleWrap:)), "z", opt),
                     vim,
+                    notify,
                     sep(),
                     item("Bigger", Some(sel!(termZoomIn:)), "=", cmd),
                     item("Smaller", Some(sel!(termZoomOut:)), "-", cmd),
@@ -571,6 +591,16 @@ fn title_for(dir: &Path) -> String {
         Some(rest) if rest.as_os_str().is_empty() => "~".into(),
         Some(rest) => format!("~/{}", rest.display()),
         None => dir.display().to_string(),
+    }
+}
+
+/// A notification was clicked: bring its pane forward (or just activate).
+pub fn reveal_pane(pane: Option<super::workspace::Id>) {
+    if let Some(app) = instance() {
+        NSApplication::sharedApplication(app.mtm()).activate();
+        if let Some(id) = pane {
+            app.with_bench(|b| b.reveal_pane(id));
+        }
     }
 }
 

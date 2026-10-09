@@ -7,6 +7,7 @@ mod header;
 mod ime;
 pub mod input;
 pub mod links;
+mod notify;
 pub mod session;
 mod sidebar;
 mod target;

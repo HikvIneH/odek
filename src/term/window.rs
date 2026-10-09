@@ -1,6 +1,8 @@
 //! The workspace window: sidebar of grouped tabs on the left, the active
 //! tab's split panes on the right. Owns the model (`Workspace`) and every
 //! pane's terminal; inactive tabs keep running but aren't in the view tree.
+//! One code viewer, created on first use, can sit in the active tab as a
+//! pane; it moves to whichever tab asks for it and isn't saved.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -23,6 +25,7 @@ use super::sidebar::{Row, RowKey, Sidebar, SidebarEvent};
 use super::target::Target;
 use super::view::{TermView, ViewEvent};
 use super::workspace::{Closed, Id, Node, Workspace};
+use crate::app::{App, ViewerEvent};
 
 const SIDEBAR_W: f64 = 240.0;
 const HEADER_H: f64 = 24.0;
@@ -42,6 +45,21 @@ struct Pane {
     attention: bool,
 }
 
+/// The code viewer pane: a header above the viewer's own views.
+struct Viewer {
+    id: Id,
+    container: Retained<NSView>,
+    header: Retained<PaneHeader>,
+    app: Retained<App>,
+}
+
+/// Opened with the default app rather than the code viewer.
+const NOT_TEXT: &[&str] = &[
+    "png", "jpg", "jpeg", "gif", "webp", "heic", "ico", "icns", "pdf", "mp4", "mov", "mp3", "wav", "zip",
+    "gz", "tar", "dmg", "app", "ipa", "apk", "xlsx", "docx", "pptx", "key", "pages", "numbers", "sqlite",
+    "db",
+];
+
 pub struct Workbench {
     mtm: MainThreadMarker,
     me: Weak<Workbench>,
@@ -56,6 +74,7 @@ pub struct Workbench {
     menu_targets: RefCell<Vec<Retained<Target>>>,
     sidebar_hidden: Cell<bool>,
     last_saved: RefCell<String>,
+    viewer: RefCell<Option<Viewer>>,
 }
 
 impl Workbench {
@@ -119,6 +138,7 @@ impl Workbench {
             menu_targets: RefCell::new(Vec::new()),
             sidebar_hidden: Cell::new(false),
             last_saved: RefCell::new(String::new()),
+            viewer: RefCell::new(None),
         });
         let (w1, w2) = (bench.me.clone(), bench.me.clone());
         bench.sidebar.set_handlers(
@@ -211,9 +231,11 @@ impl Workbench {
         }
         let text = {
             let panes = self.panes.borrow();
-            self.ws
-                .borrow()
-                .save(|id| panes.get(&id).and_then(|p| p.cwd.clone()))
+            let mut ws = self.ws.borrow().clone();
+            if let Some(v) = self.viewer_id() {
+                ws.close_pane(v);
+            }
+            ws.save(|id| panes.get(&id).and_then(|p| p.cwd.clone()))
         };
         if *self.last_saved.borrow() == text {
             return;
@@ -251,30 +273,7 @@ impl Workbench {
         header.setAutoresizingMask(
             NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewMinYMargin,
         );
-        let close = NSButton::initWithFrame(
-            NSButton::alloc(mtm),
-            NSRect::new(NSPoint::new(size.width - 26.0, 2.0), NSSize::new(20.0, 20.0)),
-        );
-        close.setBordered(false);
-        if let Some(img) = NSImage::imageWithSystemSymbolName_accessibilityDescription(
-            &NSString::from_str("xmark"),
-            Some(&NSString::from_str("Close pane")),
-        ) {
-            close.setImage(Some(&img));
-        }
-        close.setAutoresizingMask(NSAutoresizingMaskOptions::ViewMinXMargin);
-        let me = self.me.clone();
-        let target = Target::new(mtm, move |_| {
-            if let Some(b) = me.upgrade() {
-                b.request_close_pane(id);
-            }
-        });
-        unsafe {
-            close.setTarget(Some(&target));
-            close.setAction(Some(Target::action()));
-        }
-        header.addSubview(&close);
-        self.targets.borrow_mut().push(target);
+        header.addSubview(&self.close_button(id, size.width));
         container.addSubview(&header);
 
         let term = TermView::new(frame, mtm);
@@ -310,6 +309,34 @@ impl Workbench {
         );
     }
 
+    /// The × at the right of a pane header.
+    fn close_button(&self, id: Id, width: f64) -> Retained<NSButton> {
+        let close = NSButton::initWithFrame(
+            NSButton::alloc(self.mtm),
+            NSRect::new(NSPoint::new(width - 26.0, 2.0), NSSize::new(20.0, 20.0)),
+        );
+        close.setBordered(false);
+        if let Some(img) = NSImage::imageWithSystemSymbolName_accessibilityDescription(
+            &NSString::from_str("xmark"),
+            Some(&NSString::from_str("Close pane")),
+        ) {
+            close.setImage(Some(&img));
+        }
+        close.setAutoresizingMask(NSAutoresizingMaskOptions::ViewMinXMargin);
+        let me = self.me.clone();
+        let target = Target::new(self.mtm, move |_| {
+            if let Some(b) = me.upgrade() {
+                b.request_close_pane(id);
+            }
+        });
+        unsafe {
+            close.setTarget(Some(&target));
+            close.setAction(Some(Target::action()));
+        }
+        self.targets.borrow_mut().push(target);
+        close
+    }
+
     fn pane_event(&self, id: Id, e: ViewEvent) {
         match e {
             ViewEvent::Title(t) => {
@@ -332,11 +359,15 @@ impl Workbench {
                 }
             }
             ViewEvent::Exited(_) => self.close_pane(id),
-            // Default app for now; the code viewer takes this over next.
-            ViewEvent::OpenPath { path, .. } => {
-                if let Some(p) = path.to_str() {
-                    let url = objc2_foundation::NSURL::fileURLWithPath(&NSString::from_str(p));
-                    objc2_app_kit::NSWorkspace::sharedWorkspace().openURL(&url);
+            ViewEvent::OpenPath { path, line, col } => {
+                let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase());
+                if ext.is_some_and(|e| NOT_TEXT.contains(&e.as_str())) {
+                    if let Some(p) = path.to_str() {
+                        let url = objc2_foundation::NSURL::fileURLWithPath(&NSString::from_str(p));
+                        objc2_app_kit::NSWorkspace::sharedWorkspace().openURL(&url);
+                    }
+                } else {
+                    self.open_in_viewer(&path, line, col);
                 }
             }
             ViewEvent::Focused => {
@@ -360,6 +391,14 @@ impl Workbench {
 
     fn focus_active_pane(&self) {
         let Some(id) = self.focused_pane() else { return };
+        if Some(id) == self.viewer_id() {
+            let app = self.viewer.borrow().as_ref().map(|v| v.app.clone());
+            if let Some(app) = app {
+                app.focus();
+            }
+            self.refresh();
+            return;
+        }
         // Clone first: becoming first responder reports back into `pane_event`.
         let term = self.panes.borrow().get(&id).map(|p| p.term.clone());
         if let Some(term) = term {
@@ -373,7 +412,14 @@ impl Workbench {
 
     /// The folder new tabs and splits start in: the focused pane's.
     fn current_dir(&self) -> PathBuf {
-        self.focused_pane()
+        let focus = self.focused_pane();
+        if focus.is_some() && focus == self.viewer_id() {
+            let root = self.viewer.borrow().as_ref().and_then(|v| v.app.root_dir());
+            if let Some(root) = root {
+                return root;
+            }
+        }
+        focus
             .and_then(|id| {
                 self.panes
                     .borrow()
@@ -410,6 +456,18 @@ impl Workbench {
 
     fn build(&self, node: &Node, frame: NSRect, headers: bool) -> Retained<NSView> {
         match node {
+            Node::Pane(id) if Some(*id) == self.viewer_id() => {
+                let viewer = self.viewer.borrow();
+                let v = viewer.as_ref().unwrap();
+                v.container.setFrame(frame);
+                v.header.setHidden(!headers);
+                let h = frame.size.height - if headers { HEADER_H } else { 0.0 };
+                v.app.root_view().setFrame(NSRect::new(
+                    NSPoint::new(0.0, 0.0),
+                    NSSize::new(frame.size.width, h.max(10.0)),
+                ));
+                v.container.clone()
+            }
             Node::Pane(id) => {
                 let panes = self.panes.borrow();
                 let p = &panes[id];
@@ -456,6 +514,12 @@ impl Workbench {
     // ---- sidebar ----
 
     fn tab_title(&self, tab: &super::workspace::Tab) -> (String, String) {
+        if let Some(v) = self.viewer.borrow().as_ref()
+            && v.id == tab.focus
+        {
+            let dir = v.app.root_dir().as_deref().map(tilde).unwrap_or_default();
+            return (tab.name.clone().unwrap_or_else(|| v.app.display_title()), dir);
+        }
         let panes = self.panes.borrow();
         let p = panes.get(&tab.focus);
         let dir = p.and_then(|p| p.cwd.as_deref()).map(tilde).unwrap_or_default();
@@ -501,6 +565,11 @@ impl Workbench {
                 if let Some(p) = panes.get(&id) {
                     p.header.set(&pane_title(p), id == tab.focus);
                 }
+            }
+            if let Some(v) = self.viewer.borrow().as_ref() {
+                let title = v.app.display_title();
+                v.header
+                    .set(if title.is_empty() { "Files" } else { &title }, v.id == tab.focus);
             }
         } else {
             self.window.setTitle(&NSString::from_str("Odek"));
@@ -727,6 +796,12 @@ impl Workbench {
     }
 
     pub fn request_close_pane(&self, id: Id) {
+        if Some(id) == self.viewer_id() {
+            if self.viewer_confirm_discard() {
+                self.close_pane(id);
+            }
+            return;
+        }
         let running = self.running_in(&[id]);
         if running.is_empty() {
             return self.close_pane(id);
@@ -756,6 +831,9 @@ impl Workbench {
             .tab(tab)
             .map(|t| t.root.panes())
             .unwrap_or_default();
+        if self.viewer_id().is_some_and(|v| ids.contains(&v)) && !self.viewer_confirm_discard() {
+            return;
+        }
         let running = self.running_in(&ids);
         let me = self.me.clone();
         let close = move || {
@@ -782,6 +860,13 @@ impl Workbench {
         if let Some(p) = self.panes.borrow_mut().remove(&id) {
             p.term.shutdown();
             p.container.removeFromSuperview();
+        }
+        if Some(id) == self.viewer_id() {
+            let viewer = self.viewer.borrow();
+            let v = viewer.as_ref().unwrap();
+            // Free the open files; the viewer itself stays for next time.
+            v.app.release_files();
+            v.container.removeFromSuperview();
         }
         if closed == Closed::Nothing {
             return;
@@ -883,6 +968,156 @@ impl Workbench {
             b.refresh();
             b.save();
         });
+    }
+
+    // ---- code viewer ----
+
+    fn viewer_id(&self) -> Option<Id> {
+        self.viewer.borrow().as_ref().map(|v| v.id)
+    }
+
+    /// True when the viewer has no unsaved files, or the user dealt with them.
+    pub fn viewer_confirm_discard(&self) -> bool {
+        let app = self.viewer.borrow().as_ref().map(|v| v.app.clone());
+        app.is_none_or(|a| a.confirm_discard_all())
+    }
+
+    pub fn app_activated(&self) {
+        let app = self.viewer.borrow().as_ref().map(|v| v.app.clone());
+        if let Some(app) = app {
+            app.app_activated();
+        }
+    }
+
+    fn ensure_viewer(&self) -> Retained<App> {
+        if let Some(v) = self.viewer.borrow().as_ref() {
+            return v.app.clone();
+        }
+        let mtm = self.mtm;
+        let id = self.ws.borrow_mut().new_id();
+        let size = self.content.bounds().size;
+        let frame = NSRect::new(NSPoint::new(0.0, 0.0), size);
+        let container = NSView::initWithFrame(NSView::alloc(mtm), frame);
+        container.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
+        );
+        let header = PaneHeader::new(
+            NSRect::new(
+                NSPoint::new(0.0, size.height - HEADER_H),
+                NSSize::new(size.width, HEADER_H),
+            ),
+            mtm,
+        );
+        header.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewMinYMargin,
+        );
+        header.addSubview(&self.close_button(id, size.width));
+        container.addSubview(&header);
+        let app = App::new_embedded(
+            NSRect::new(
+                NSPoint::new(0.0, 0.0),
+                NSSize::new(size.width, size.height - HEADER_H),
+            ),
+            mtm,
+        );
+        container.addSubview(&app.root_view());
+        let me = self.me.clone();
+        app.set_on_event(move |e| {
+            if let Some(b) = me.upgrade() {
+                b.viewer_event(id, e);
+            }
+        });
+        *self.viewer.borrow_mut() = Some(Viewer {
+            id,
+            container,
+            header,
+            app: app.clone(),
+        });
+        app
+    }
+
+    fn viewer_event(&self, id: Id, e: ViewerEvent) {
+        match e {
+            ViewerEvent::Title(_) => self.refresh(),
+            ViewerEvent::Focused => {
+                let tab = self.ws.borrow().tab_of_pane(id);
+                if let Some(tab) = tab
+                    && let Some(t) = self.ws.borrow_mut().tab_mut(tab)
+                {
+                    t.focus = id;
+                }
+                self.refresh();
+            }
+            ViewerEvent::Close => self.request_close_pane(id),
+        }
+    }
+
+    /// Put the viewer in the active tab, beside the focused pane, taking it
+    /// out of whatever tab had it.
+    fn place_viewer(&self) -> Retained<App> {
+        let app = self.ensure_viewer();
+        let id = self.viewer_id().unwrap();
+        let Some(active) = self.ws.borrow().active else {
+            return app;
+        };
+        let here = self.ws.borrow().tab_of_pane(id);
+        if here == Some(active) {
+            if let Some(t) = self.ws.borrow_mut().tab_mut(active) {
+                t.focus = id;
+            }
+            return app;
+        }
+        self.sync_ratios();
+        if let Some(other) = here {
+            let mut ws = self.ws.borrow_mut();
+            let rest = ws.tab(other).and_then(|t| t.root.clone().without(id));
+            match rest {
+                Some(root) => {
+                    let t = ws.tab_mut(other).unwrap();
+                    if t.focus == id {
+                        t.focus = root.panes()[0];
+                    }
+                    t.root = root;
+                }
+                None => ws.remove_tab(other),
+            }
+            ws.active = Some(active);
+        }
+        {
+            let mut ws = self.ws.borrow_mut();
+            ws.split(active, id, true);
+            // Code wants a little more width than the terminal beside it.
+            if let Some(t) = ws.tab_mut(active) {
+                t.root.set_ratio_before(id, 0.45);
+            }
+        }
+        self.show_active();
+        app
+    }
+
+    /// Open a file (at a line) or folder from a terminal in the viewer.
+    pub fn open_in_viewer(&self, path: &Path, line: Option<u32>, col: Option<u32>) {
+        let near = self.current_dir();
+        let app = self.place_viewer();
+        app.open_location(path, line, col, Some(&near));
+        app.focus();
+        self.refresh();
+    }
+
+    /// ⌘P: quick open in the focused pane's project.
+    pub fn quick_open_here(&self) {
+        let dir = self.current_dir();
+        let app = self.place_viewer();
+        app.quick_open_in(&dir);
+        self.refresh();
+    }
+
+    /// ⇧⌘E: the file tree for the focused pane's folder.
+    pub fn show_files_here(&self) {
+        let dir = self.current_dir();
+        let app = self.place_viewer();
+        app.show_tree_in(&dir);
+        self.refresh();
     }
 
     // ---- periodic ----

@@ -55,6 +55,21 @@ impl Node {
         }
     }
 
+    /// Set the share of the split whose second half is exactly `pane`.
+    pub fn set_ratio_before(&mut self, pane: Id, value: f64) {
+        if let Node::Split {
+            ratio, first, second, ..
+        } = self
+        {
+            if **second == Node::Pane(pane) {
+                *ratio = value;
+            } else {
+                first.set_ratio_before(pane, value);
+                second.set_ratio_before(pane, value);
+            }
+        }
+    }
+
     /// The tree without `target`; None when nothing is left.
     pub fn without(self, target: Id) -> Option<Node> {
         match self {
@@ -97,7 +112,7 @@ pub struct Group {
     pub tabs: Vec<Tab>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Workspace {
     pub groups: Vec<Group>,
     /// The tab on screen.

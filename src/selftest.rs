@@ -154,7 +154,11 @@ impl App {
         let ui = self.ui();
         let dir = self.ivars().selftest.borrow().as_ref().map(|t| t.dir.clone());
         let Some(dir) = dir else { return };
-        let window: &objc2_app_kit::NSWindow = if panel { &ui.panel } else { ui.window.as_ref().unwrap() };
+        let window: &objc2_app_kit::NSWindow = if panel {
+            &ui.panel
+        } else {
+            ui.window.as_ref().unwrap()
+        };
         // The content view's superview is the frame view, which includes the title bar.
         if let Some(content) = window.contentView() {
             let view = unsafe { content.superview() }.unwrap_or(content);

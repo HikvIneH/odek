@@ -14,7 +14,8 @@ use std::time::{Instant, SystemTime};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol, ProtocolObject, Sel};
 use objc2::{
-    AllocAnyThread, ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel,
+    AllocAnyThread, ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class,
+    msg_send, sel,
 };
 use objc2_app_kit::*;
 use objc2_foundation::*;
@@ -708,6 +709,10 @@ impl App {
         );
         this.build_into(&root, None);
         this.setView(&root);
+        // In a pane the file tree starts hidden; ⇧⌘E shows it.
+        let ui = this.ui();
+        ui.split.subviews().objectAtIndex(0).setHidden(true);
+        ui.split.adjustSubviews();
         this
     }
 
@@ -746,11 +751,19 @@ impl App {
     pub fn display_title(&self) -> String {
         let dirty = self.ivars().tabs.borrow().list.iter().any(|t| t.dirty);
         let title = self.ivars().title.borrow();
-        if dirty { format!("● {title}") } else { title.clone() }
+        if dirty {
+            format!("● {title}")
+        } else {
+            title.clone()
+        }
     }
 
     pub fn root_dir(&self) -> Option<PathBuf> {
-        self.ivars().tree.borrow().as_ref().map(|t| t.root().to_path_buf())
+        self.ivars()
+            .tree
+            .borrow()
+            .as_ref()
+            .map(|t| t.root().to_path_buf())
     }
 
     /// Switch the project to `root` unless it is already open. False if the
@@ -858,7 +871,10 @@ impl App {
     /// ⌘W: hide quick open, else close the current file, else the window/pane.
     fn close_current(&self) {
         let ui = self.ui();
-        if NSApplication::sharedApplication(self.mtm()).keyWindow().is_some_and(|w| ptr_eq(&*w, &*ui.panel)) {
+        if NSApplication::sharedApplication(self.mtm())
+            .keyWindow()
+            .is_some_and(|w| ptr_eq(&*w, &*ui.panel))
+        {
             ui.panel.orderOut(None);
             return;
         }
@@ -1842,7 +1858,12 @@ impl App {
         ui.text.setEditable(false);
         ui.scroll.setRulersVisible(false);
         self.set_wrap(false);
-        let root_name = self.ivars().tree.borrow().as_ref().map(|t| t.node(ROOT).name.clone());
+        let root_name = self
+            .ivars()
+            .tree
+            .borrow()
+            .as_ref()
+            .map(|t| t.node(ROOT).name.clone());
         if let Some(name) = root_name {
             self.set_title(&name, None);
         }

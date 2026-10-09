@@ -23,7 +23,7 @@ use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
 use super::header::PaneHeader;
 use super::settings;
-use super::sidebar::{Row, RowKey, Sidebar, SidebarEvent};
+use super::sidebar::{PaneRow, Row, RowKey, Sidebar, SidebarEvent};
 use super::target::Target;
 use super::view::{TermView, ViewEvent};
 use super::workspace::{Closed, Id, Node, Workspace};
@@ -642,6 +642,36 @@ impl Workbench {
                 let running = ids
                     .iter()
                     .any(|i| panes.get(i).is_some_and(|p| p.program.is_some()));
+                let viewer = self.viewer.borrow();
+                let pane_rows = if ids.len() > 1 {
+                    ids.iter()
+                        .map(|&id| match (panes.get(&id), viewer.as_ref()) {
+                            (Some(p), _) => PaneRow {
+                                id,
+                                title: pane_title(p),
+                                focused: id == t.focus,
+                                attention: p.attention,
+                                running: p.program.is_some(),
+                            },
+                            (None, Some(v)) if v.id == id => PaneRow {
+                                id,
+                                title: v.app.display_title(),
+                                focused: id == t.focus,
+                                attention: false,
+                                running: false,
+                            },
+                            _ => PaneRow {
+                                id,
+                                title: String::new(),
+                                focused: false,
+                                attention: false,
+                                running: false,
+                            },
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
                 rows.push(Row::Tab {
                     id: t.id,
                     title,
@@ -649,6 +679,7 @@ impl Workbench {
                     active: ws.active == Some(t.id),
                     attention,
                     running,
+                    panes: pane_rows,
                 });
             }
         }
@@ -675,6 +706,7 @@ impl Workbench {
     fn sidebar_event(&self, e: SidebarEvent) {
         match e {
             SidebarEvent::Select(tab) => self.select_tab(tab),
+            SidebarEvent::SelectPane(pane) => self.reveal_pane(pane),
             SidebarEvent::ToggleGroup(g) => {
                 if let Some(g) = self.ws.borrow_mut().groups.iter_mut().find(|x| x.id == g) {
                     g.collapsed = !g.collapsed;

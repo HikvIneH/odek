@@ -20,6 +20,8 @@ use super::workspace::Id;
 
 const GROUP_H: f64 = 28.0;
 const TAB_H: f64 = 44.0;
+/// One line per pane under a split tab.
+const PANE_H: f64 = 20.0;
 const TOP_BAR: f64 = 40.0;
 
 #[derive(Clone, Debug)]
@@ -37,7 +39,18 @@ pub enum Row {
         active: bool,
         attention: bool,
         running: bool,
+        /// The panes of a split tab, listed under it; empty when unsplit.
+        panes: Vec<PaneRow>,
     },
+}
+
+#[derive(Clone, Debug)]
+pub struct PaneRow {
+    pub id: Id,
+    pub title: String,
+    pub focused: bool,
+    pub attention: bool,
+    pub running: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -49,6 +62,7 @@ pub enum RowKey {
 
 pub enum SidebarEvent {
     Select(Id),
+    SelectPane(Id),
     ToggleGroup(Id),
     RenameTab(Id),
     RenameGroup(Id),
@@ -112,7 +126,10 @@ define_class!(
                         return self.emit(SidebarEvent::RenameTab(id));
                     }
                     self.ivars().drag.set(Some(Drag { tab: id, start: p, moving: false, drop: None }));
-                    self.emit(SidebarEvent::Select(id));
+                    match self.pane_at(p.y) {
+                        Some(pane) => self.emit(SidebarEvent::SelectPane(pane)),
+                        None => self.emit(SidebarEvent::Select(id)),
+                    }
                 }
                 RowKey::Group(id) if event.clickCount() == 2 => self.emit(SidebarEvent::RenameGroup(id)),
                 _ => {}
@@ -198,11 +215,20 @@ impl SidebarList {
             let group_hit = !query.is_empty() && name.to_lowercase().contains(&query);
             let mut tabs = Vec::new();
             i += 1;
-            while let Some(row @ Row::Tab { title, subtitle, .. }) = rows.get(i) {
+            while let Some(
+                row @ Row::Tab {
+                    title,
+                    subtitle,
+                    panes,
+                    ..
+                },
+            ) = rows.get(i)
+            {
                 let hit = query.is_empty()
                     || group_hit
                     || title.to_lowercase().contains(&query)
-                    || subtitle.to_lowercase().contains(&query);
+                    || subtitle.to_lowercase().contains(&query)
+                    || panes.iter().any(|p| p.title.to_lowercase().contains(&query));
                 if hit {
                     tabs.push(row.clone());
                 }
@@ -216,8 +242,9 @@ impl SidebarList {
             y += GROUP_H;
             if !*collapsed || !query.is_empty() {
                 for t in tabs {
+                    let h = row_height(&t);
                     shown.push((t, y));
-                    y += TAB_H;
+                    y += h;
                 }
             }
         }
@@ -245,6 +272,22 @@ impl SidebarList {
         RowKey::Empty
     }
 
+    /// The pane line under `y`, if it's one of a split tab's.
+    fn pane_at(&self, y: f64) -> Option<Id> {
+        self.ivars()
+            .shown
+            .borrow()
+            .iter()
+            .find_map(|(row, top)| match row {
+                Row::Tab { panes, .. } if panes.len() > 1 && y >= top + TAB_H - 2.0 => {
+                    let i = ((y - top - TAB_H + 2.0) / PANE_H).floor() as usize;
+                    panes.get(i).map(|p| p.id)
+                }
+                _ => None,
+            })
+            .filter(|_| matches!(self.key_at(y), RowKey::Tab(_)))
+    }
+
     /// Where a dragged tab would land: (group, index, line y).
     fn drop_at(&self, y: f64) -> Option<(Id, usize, f64)> {
         let shown = self.ivars().shown.borrow();
@@ -262,11 +305,12 @@ impl SidebarList {
                 }
                 Row::Tab { .. } => {
                     let g = group?;
-                    if y < top + TAB_H / 2.0 && y >= *top - TAB_H / 2.0 {
+                    let h = row_height(row);
+                    if y < top + h / 2.0 && y >= *top - TAB_H / 2.0 {
                         return Some((g, index, *top));
                     }
                     index += 1;
-                    best = Some((g, index, top + TAB_H));
+                    best = Some((g, index, top + h));
                 }
             }
         }
@@ -313,11 +357,11 @@ impl SidebarList {
                     active,
                     attention,
                     running,
-                    ..
+                    panes,
                 } => {
                     let card = NSRect::new(
                         NSPoint::new(8.0, top + 2.0),
-                        NSSize::new(width - 16.0, TAB_H - 4.0),
+                        NSSize::new(width - 16.0, row_height(row) - 4.0),
                     );
                     let dragged = drag.is_some_and(|d| d.moving && d.tab == *id);
                     if *active || dragged {
@@ -357,6 +401,9 @@ impl SidebarList {
                         false,
                         &NSColor::secondaryLabelColor(),
                     );
+                    if panes.len() > 1 {
+                        draw_panes(panes, top + TAB_H - 2.0, text_x, text_w);
+                    }
                 }
             }
         }
@@ -372,6 +419,36 @@ impl SidebarList {
                 NSSize::new(width - 24.0, 2.0),
             ));
         }
+    }
+}
+
+/// A split tab's panes, one line each: a dot like the tab's, the title,
+/// brighter for the focused pane.
+fn draw_panes(panes: &[PaneRow], y0: f64, x: f64, w: f64) {
+    for (i, p) in panes.iter().enumerate() {
+        let y = y0 + i as f64 * PANE_H;
+        let dot = if p.attention {
+            NSColor::systemOrangeColor()
+        } else if p.running {
+            NSColor::systemGreenColor()
+        } else {
+            NSColor::tertiaryLabelColor()
+        };
+        dot.setFill();
+        let r = NSRect::new(NSPoint::new(x + 2.0, y + 7.0), NSSize::new(5.0, 5.0));
+        NSBezierPath::bezierPathWithOvalInRect(r).fill();
+        let color = if p.focused {
+            NSColor::labelColor()
+        } else {
+            NSColor::secondaryLabelColor()
+        };
+        draw_text(
+            &p.title,
+            NSRect::new(NSPoint::new(x + 14.0, y + 2.0), NSSize::new(w - 14.0, 16.0)),
+            11.5,
+            false,
+            &color,
+        );
     }
 }
 
@@ -396,6 +473,7 @@ fn brand_blue() -> Retained<NSColor> {
 fn row_height(row: &Row) -> f64 {
     match row {
         Row::Group { .. } => GROUP_H,
+        Row::Tab { panes, .. } if panes.len() > 1 => TAB_H + panes.len() as f64 * PANE_H + 4.0,
         Row::Tab { .. } => TAB_H,
     }
 }

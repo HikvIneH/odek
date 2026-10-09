@@ -125,6 +125,9 @@ pub struct Term {
     last_char: Option<char>,
     /// The previous character was a zero-width joiner: the next one joins too.
     join_next: bool,
+    /// The last resize reflowed the main screen: line ids changed, so the
+    /// view should drop its scroll anchor. Cleared by the view.
+    pub reflowed: bool,
 }
 
 impl Term {
@@ -159,6 +162,7 @@ impl Term {
             dec_graphics: false,
             last_char: None,
             join_next: false,
+            reflowed: false,
         }
     }
 
@@ -260,6 +264,9 @@ impl Term {
         if cols == self.cols && rows == self.rows {
             return;
         }
+        if cols != self.cols {
+            self.reflow_main(cols, rows);
+        }
         for grid in [&mut self.main, &mut self.alt] {
             for line in &mut grid.lines {
                 fit_width(line, cols);
@@ -312,6 +319,109 @@ impl Term {
         }
         self.dirty = vec![true; rows];
         self.all_dirty = true;
+    }
+
+    /// Re-wrap scrollback and the main screen to `cols`: soft-wrapped runs are
+    /// joined into logical lines and split again. The cursor follows its
+    /// character and the screen stays anchored to the bottom.
+    fn reflow_main(&mut self, cols: usize, rows: usize) {
+        let alt = self.alt_active;
+        let cur = if alt { self.saved_main.cursor } else { self.cursor };
+        let old_cols = self.cols;
+        let hist = self.history.take();
+        let cursor_idx = hist.len() + cur.row;
+        let screen = std::mem::take(&mut self.main.lines);
+        let mut src = hist.into_iter().chain(screen).enumerate().peekable();
+
+        let mut out: Vec<Line> = Vec::new();
+        let mut buf: Vec<Cell> = Vec::new();
+        let mut cur_off: Option<usize> = None;
+        let mut cursor_at = (0usize, 0usize);
+        while let Some((idx, mut line)) = src.next() {
+            let wrapped = line.wrapped;
+            if wrapped && line.cells.len() < old_cols {
+                line.cells.resize(old_cols, Cell::BLANK);
+            }
+            // A wide character that did not fit left a blank pad: not content.
+            if wrapped
+                && line.cells.last().is_some_and(Cell::is_blank)
+                && src
+                    .peek()
+                    .is_some_and(|(_, n)| n.cells.first().is_some_and(|c| c.flags & flag::WIDE != 0))
+            {
+                line.cells.pop();
+            }
+            if idx == cursor_idx {
+                cur_off = Some(buf.len() + cur.col + usize::from(cur.pending_wrap));
+            }
+            buf.extend_from_slice(&line.cells);
+            if wrapped && src.peek().is_some() {
+                continue;
+            }
+            let len = buf.iter().rposition(|c| !c.is_blank()).map_or(0, |i| i + 1);
+            let mut start = 0;
+            loop {
+                let mut end = (start + cols).min(len);
+                if end > start && end < len && buf[end - 1].flags & flag::WIDE != 0 {
+                    end -= 1;
+                }
+                let more_text = end < len;
+                let limit = if more_text { end } else { start + cols };
+                if let Some(o) = cur_off
+                    && o >= start
+                    && o < limit
+                {
+                    cursor_at = (out.len(), o - start);
+                }
+                let more_cursor = cur_off.is_some_and(|o| o >= limit);
+                let last = !more_text && !more_cursor;
+                let lo = start.min(len);
+                let hi = end.max(lo);
+                let cut = buf[lo..hi]
+                    .iter()
+                    .rposition(|c| !c.is_blank())
+                    .map_or(0, |i| i + 1);
+                out.push(Line {
+                    cells: buf[lo..lo + cut].to_vec(),
+                    wrapped: !last,
+                });
+                if last {
+                    break;
+                }
+                start = limit;
+            }
+            cur_off = None;
+            buf.clear();
+            if buf.capacity() > 1 << 16 {
+                buf.shrink_to(1 << 12);
+            }
+        }
+        // Blank lines below the cursor are not content.
+        while out.len() > cursor_at.0 + 1 && out.last().is_some_and(|l| l.cells.is_empty() && !l.wrapped) {
+            out.pop();
+        }
+        let n = out.len();
+        let top = n.saturating_sub(rows).min(cursor_at.0);
+        for line in out.drain(..top) {
+            self.history.push(line);
+        }
+        out.truncate(rows);
+        for line in &mut out {
+            line.cells.resize(cols, Cell::BLANK);
+        }
+        out.resize_with(rows, || Line::new(cols, Cell::BLANK));
+        out.shrink_to_fit();
+        self.main.lines = out;
+        let (row, col) = (cursor_at.0 - top, cursor_at.1);
+        let c = if alt {
+            &mut self.saved_main.cursor
+        } else {
+            &mut self.cursor
+        };
+        c.row = row;
+        c.col = col;
+        c.pending_wrap = false;
+        self.reflowed = true;
     }
 
     // ---- primitives ----
@@ -1398,5 +1508,134 @@ mod tests {
         assert_eq!(t.history.len(), DEFAULT_SCROLLBACK);
         // ~90 visible chars per line × 8 bytes, plus overhead.
         assert!(t.mem_bytes() < 9 << 20, "{} bytes", t.mem_bytes());
+    }
+
+    fn all_text(t: &Term) -> Vec<String> {
+        (0..t.total_lines())
+            .map(|i| {
+                let mut s = String::new();
+                line_text(t.line(i), &t.clusters, &mut s);
+                s.trim_end().to_string()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn reflow_narrow_splits_and_wide_rejoins() {
+        let mut t = Term::new(20, 5);
+        run(&mut t, b"0123456789abcdefghij0123456789\r\nok");
+        assert_eq!(screen(&t)[..3], ["0123456789abcdefghij", "0123456789", "ok"]);
+        t.resize(10, 5);
+        assert_eq!(screen(&t)[..4], ["0123456789", "abcdefghij", "0123456789", "ok"]);
+        assert!(t.grid().lines[0].wrapped && t.grid().lines[1].wrapped && !t.grid().lines[2].wrapped);
+        t.resize(30, 5);
+        assert_eq!(screen(&t)[..2], ["0123456789abcdefghij0123456789", "ok"]);
+        assert!(t.reflowed);
+    }
+
+    #[test]
+    fn reflow_keeps_cursor_on_character() {
+        let mut t = Term::new(20, 5);
+        run(&mut t, b"$ echo hello world foo");
+        assert_eq!(t.cursor_pos(), (1, 2));
+        t.resize(8, 5);
+        let (r, c) = t.cursor_pos();
+        assert_eq!(t.line(t.total_lines() - t.rows + r).cells[c - 1].ch, 'o' as u32);
+        t.resize(40, 5);
+        assert_eq!(t.cursor_pos(), (0, 22));
+        // Cursor past the text keeps its offset.
+        let mut t = Term::new(20, 5);
+        run(&mut t, b"$ \x1b[3C");
+        assert_eq!(t.cursor_pos(), (0, 5));
+        t.resize(4, 5);
+        assert_eq!(t.cursor_pos(), (1, 1));
+        t.resize(20, 5);
+        assert_eq!(t.cursor_pos(), (0, 5));
+    }
+
+    #[test]
+    fn reflow_wide_char_not_split() {
+        let mut t = Term::new(5, 4);
+        run(&mut t, "abcd中文x".as_bytes());
+        assert_eq!(screen(&t)[..2], ["abcd", "中文x"]);
+        t.resize(3, 4);
+        for i in 0..t.total_lines() {
+            let l = t.line(i);
+            assert!(
+                l.cells.last().is_none_or(|c| c.flags & flag::WIDE == 0),
+                "line {i}"
+            );
+        }
+        assert_eq!(all_text(&t).concat(), "abcd中文x");
+        t.resize(10, 4);
+        assert_eq!(screen(&t)[0], "abcd中文x");
+        assert_eq!(t.total_lines(), 4);
+    }
+
+    #[test]
+    fn reflow_across_scrollback() {
+        let mut t = Term::new(10, 3);
+        run(&mut t, b"aaaaaaaaaabbbbbbbbbbcc\r\n1\r\n2\r\n3\r\n4");
+        assert!(t.history.len() >= 2);
+        t.resize(5, 3);
+        let before = all_text(&t);
+        assert_eq!(before[..5], ["aaaaa", "aaaaa", "bbbbb", "bbbbb", "cc"]);
+        t.resize(30, 3);
+        let after = all_text(&t);
+        assert_eq!(after[0], "aaaaaaaaaabbbbbbbbbbcc");
+        assert_eq!(after[1..], ["1", "2", "3", "4"]);
+        assert_eq!(t.cursor_pos(), (2, 1));
+    }
+
+    #[test]
+    fn reflow_respects_history_caps() {
+        let mut t = Term::new(40, 4);
+        t.history.max_lines = 50;
+        for i in 0..100 {
+            run(&mut t, format!("{i} {}\r\n", "y".repeat(35)).as_bytes());
+        }
+        t.resize(10, 4);
+        assert!(t.history.len() <= 50);
+        assert_eq!(t.main.lines.len(), 4);
+        assert!(t.main.lines.iter().all(|l| l.cells.len() == 10));
+        let bytes: usize = t.history.lines.iter().map(Line::bytes).sum();
+        assert!(t.history.bytes() >= bytes);
+        assert!(
+            t.history
+                .lines
+                .iter()
+                .all(|l| l.cells.last().is_none_or(|c| !c.is_blank()))
+        );
+    }
+
+    #[test]
+    fn alt_screen_is_not_reflowed() {
+        let mut t = Term::new(10, 3);
+        run(&mut t, b"\x1b[?1049h0123456789ab");
+        assert!(t.alt_active);
+        t.resize(5, 3);
+        assert_eq!(screen(&t)[0], "01234");
+        assert_eq!(screen(&t)[1], "ab");
+        run(&mut t, b"\x1b[?1049l");
+        assert!(!t.alt_active);
+    }
+
+    #[test]
+    #[ignore]
+    fn reflow_ten_thousand_lines_timing() {
+        let mut t = Term::new(120, 40);
+        t.history.max_lines = 20_000;
+        t.history.max_bytes = 1 << 30;
+        for i in 0..10_000 {
+            run(&mut t, format!("{i} {}\r\n", "z".repeat(150)).as_bytes());
+        }
+        let n = t.history.len();
+        let t0 = std::time::Instant::now();
+        t.resize(80, 40);
+        let a = t0.elapsed();
+        t.resize(120, 40);
+        let b = t0.elapsed() - a;
+        eprintln!("history {n} -> narrow {a:?}, wide {b:?}");
+        assert!(a.as_millis() < 500 && b.as_millis() < 500);
     }
 }

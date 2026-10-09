@@ -221,6 +221,12 @@ impl History {
         Some(line)
     }
 
+    /// Take every line out, leaving the history empty (ids are not bumped).
+    pub fn take(&mut self) -> VecDeque<Line> {
+        self.bytes = 0;
+        std::mem::take(&mut self.lines)
+    }
+
     pub fn clear(&mut self) {
         self.evicted += self.lines.len() as u64;
         self.lines = VecDeque::new();

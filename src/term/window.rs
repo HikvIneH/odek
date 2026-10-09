@@ -131,8 +131,12 @@ impl Workbench {
         blur.setAutoresizingMask(
             NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
         );
-        blur.addSubview(&split);
-        window.setContentView(Some(&blur));
+        // The blur sits behind the panes as a sibling, so hiding it (opaque
+        // windows) never hides them.
+        let root = NSView::initWithFrame(NSView::alloc(mtm), bounds);
+        root.addSubview(&blur);
+        root.addSubview(&split);
+        window.setContentView(Some(&root));
         split.adjustSubviews();
         split.setPosition_ofDividerAtIndex(SIDEBAR_W, 0);
         split.setHoldingPriority_forSubviewAtIndex(260.0, 0);

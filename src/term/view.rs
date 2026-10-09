@@ -93,9 +93,12 @@ struct Theme {
     ansi: [u32; 16],
 }
 
+const CURSOR: u32 = 0x3B82F6;
+
 const DARK: Theme = Theme {
     fg: 0xE6EDF3,
-    bg: 0x0D1117,
+    // The icon's ink.
+    bg: 0x0B0F14,
     ansi: [
         0x484F58, 0xFF7B72, 0x3FB950, 0xD29922, 0x58A6FF, 0xBC8CFF, 0x39C5CF, 0xB1BAC4, 0x6E7681, 0xFFA198,
         0x56D364, 0xE3B341, 0x79C0FF, 0xD2A8FF, 0x56D4DD, 0xFFFFFF,
@@ -941,7 +944,8 @@ impl TermView {
         let y = PAD_Y + row as f64 * m.ch;
         let rect = cell_rect(m, col, wide, y);
         let theme = self.theme();
-        let color = self.color(theme.fg);
+        // The icon's cursor blue.
+        let color = self.color(CURSOR);
         if !self.ivars().focused.get() {
             color.setStroke();
             NSBezierPath::strokeRect(NSRect::new(

@@ -1,13 +1,9 @@
 <p align="center">
-  <img src="assets/icon-1024.png" width="112" alt="Odek icon">
+  <img src="assets/icon-1024.png" width="128" alt="odek">
 </p>
-
-<h1 align="center">Odek</h1>
-
-<p align="center">
-  <em>A tiny, native terminal for macOS, made for running coding agents side by side.</em><br>
-  Grouped tabs, split panes and a built-in code viewer, in about 22 MB.
-</p>
+<h1 align="center"><code>odek</code></h1>
+<p align="center">A tiny, native terminal for macOS, made for running coding agents side by side.<br>
+Grouped tabs, split panes and a built-in code viewer, in about 22 MB.</p>
 
 <p align="center">
   <a href="https://github.com/HikvIneH/odek/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/HikvIneH/odek/actions/workflows/ci.yml/badge.svg"></a>
@@ -290,8 +286,11 @@ scripts/selftest.sh target/release/odek <project> <out-dir> <query> <file>...
 `scripts/install-term-preview.sh` installs a build as a separate
 `Odek Terminal Preview.app`, to try a branch without replacing `Odek.app`.
 
-The icon is drawn by `assets/make-icon.swift`, with simpler artwork at 16 and
-32 px; `assets/make-icns.sh` rebuilds `assets/AppIcon.icns`.
+The icon (a prompt chevron and cursor on an ink tile) is drawn by
+`assets/make-icon.swift`; `assets/make-icns.sh` builds `assets/AppIcon.icns`
+from `assets/icon-1024.png` (`--redraw` regenerates that first). The mark and
+the wordmark are also in `assets/` as SVG (`odek-icon`, `odek-mark`,
+`odek-lockup`, `odek-lockup-light`).
 
 ### Project layout
 

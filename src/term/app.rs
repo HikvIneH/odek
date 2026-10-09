@@ -618,7 +618,7 @@ mod snap {
 
     use super::super::window::Workbench;
     use objc2::rc::Retained;
-    use objc2_app_kit::{NSApplication, NSBitmapImageFileType, NSView};
+    use objc2_app_kit::{NSBitmapImageFileType, NSView};
     use objc2_foundation::NSDictionary;
 
     use super::super::view::TermView;
@@ -781,10 +781,10 @@ mod snap {
                 view.mem_bytes() as f64 / 1048576.0
             ),
             "quit" => {
+                // No confirmation dialogs in a scripted run: end everything.
                 view.shutdown();
-                let mtm = objc2::MainThreadMarker::new().unwrap();
-                NSApplication::sharedApplication(mtm).terminate(None);
-                return;
+                bench.iter().for_each(|b| b.shutdown_all());
+                std::process::exit(0);
             }
             other => eprintln!("SNAP unknown step {other}"),
         }

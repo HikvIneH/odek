@@ -79,6 +79,7 @@ number Activity Monitor shows.
 | One shell, idle | ~22 MB |
 | Claude Code running in a pane | ~36 MB |
 | Two tabs, three panes | ~45 MB |
+| Six panes, each with a full scrollback | ~75 MB (133 MB peak while all six printed at once) |
 | A file open in the code viewer beside a terminal | ~58 MB |
 | `seq 1 3000000` | 3.1 s, then back to ~35 MB |
 | Full scrollback (10,000 lines) | ~2 MB per pane |

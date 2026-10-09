@@ -1,5 +1,6 @@
 pub mod app;
 mod boxdraw;
+mod drop;
 mod find;
 mod findbar;
 pub mod grid;

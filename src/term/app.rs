@@ -227,6 +227,27 @@ define_class!(
             self.with_bench(|b| b.quick_open_here());
         }
 
+        // ⌘O. Reaches here when a terminal has focus; the code viewer
+        // answers it itself (opening a folder in the viewer).
+        #[unsafe(method(appOpenFolder:))]
+        fn menu_open(&self, _sender: Option<&AnyObject>) {
+            let panel = objc2_app_kit::NSOpenPanel::openPanel(self.mtm());
+            panel.setCanChooseDirectories(true);
+            panel.setCanChooseFiles(true);
+            panel.setAllowsMultipleSelection(true);
+            panel.setPrompt(Some(&NSString::from_str("Open")));
+            panel.setMessage(Some(&NSString::from_str(
+                "A folder opens as a new tab; a file opens in the code viewer.",
+            )));
+            if panel.runModal() == objc2_app_kit::NSModalResponseOK {
+                for url in panel.URLs().iter() {
+                    if let Some(path) = url.to_file_path() {
+                        self.with_bench(|b| b.open_path(&path));
+                    }
+                }
+            }
+        }
+
         #[unsafe(method(termShowFiles:))]
         fn menu_show_files(&self, _sender: Option<&AnyObject>) {
             self.with_bench(|b| b.show_files_here());
@@ -507,6 +528,7 @@ impl TermApp {
             menu(
                 "File",
                 vec![
+                    item("Open…", Some(sel!(appOpenFolder:)), "o", cmd),
                     item("Quick Open…", Some(sel!(appQuickOpen:)), "p", cmd),
                     item("Show Files", Some(sel!(termShowFiles:)), "e", cmd | shift),
                     sep(),
@@ -800,6 +822,7 @@ mod snap {
                 bench.iter().for_each(|b| b.open_in_viewer(&path, line, col));
             }
             "quickopen" => bench.iter().for_each(|b| b.quick_open_here()),
+            "closepane" => bench.iter().for_each(|b| b.request_close_focused()),
             "viewerscroll" => bench
                 .iter()
                 .for_each(|b| println!("SNAP viewer {}", b.viewer_debug())),

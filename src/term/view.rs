@@ -586,6 +586,9 @@ impl TermView {
             };
             if !same {
                 s.resize(cols, rows, (m.cw.round() as u16, m.ch.round() as u16));
+                if std::mem::take(&mut s.term.lock().unwrap().reflowed) {
+                    self.ivars().anchor.set(None);
+                }
                 self.setNeedsDisplay(true);
             }
         }

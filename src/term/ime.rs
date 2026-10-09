@@ -84,10 +84,13 @@ impl Ime {
 }
 
 /// Whether a keyDown should go through the input system: plain typing (no
-/// ctrl/option/cmd; Option stays Meta), dead keys (empty characters), or
+/// ctrl/cmd, nor option while it is Meta), dead keys (empty characters), or
 /// anything at all while an input method is composing.
-pub fn wants(chars: &str, flags: NSEventModifierFlags, composing: bool) -> bool {
-    let held = NSEventModifierFlags::Control | NSEventModifierFlags::Option | NSEventModifierFlags::Command;
+pub fn wants(chars: &str, flags: NSEventModifierFlags, composing: bool, option_is_meta: bool) -> bool {
+    let mut held = NSEventModifierFlags::Control | NSEventModifierFlags::Command;
+    if option_is_meta {
+        held |= NSEventModifierFlags::Option;
+    }
     if flags.intersects(held) {
         return false;
     }
@@ -148,4 +151,19 @@ pub fn draw_marked(
         )
     };
     unsafe { NSString::from_str(&shown).drawAtPoint_withAttributes(origin, Some(&attrs)) };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn option_goes_to_the_input_system_unless_meta() {
+        let opt = NSEventModifierFlags::Option;
+        assert!(!wants("a", opt, false, true));
+        assert!(wants("\u{2122}", opt, false, false));
+        assert!(wants("", opt, false, false), "dead key");
+        assert!(!wants("\u{F702}", opt, false, false), "Option+Left stays a key");
+        assert!(!wants("a", NSEventModifierFlags::Command | opt, false, false));
+    }
 }

@@ -9,6 +9,7 @@ pub mod input;
 pub mod links;
 mod notify;
 pub mod session;
+mod settings;
 mod sidebar;
 mod target;
 pub mod view;

@@ -207,6 +207,17 @@ impl History {
         }
         self.bytes += line.bytes();
         self.lines.push_back(line);
+        self.trim();
+    }
+
+    /// Change the caps; lines over the new ones are dropped oldest first.
+    pub fn set_limits(&mut self, max_lines: usize, max_bytes: usize) {
+        self.max_lines = max_lines;
+        self.max_bytes = max_bytes;
+        self.trim();
+    }
+
+    fn trim(&mut self) {
         while self.lines.len() > self.max_lines || (self.bytes > self.max_bytes && self.lines.len() > 1) {
             if let Some(old) = self.lines.pop_front() {
                 self.bytes -= old.bytes();

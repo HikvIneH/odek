@@ -1399,6 +1399,18 @@ mod tests {
     }
 
     #[test]
+    fn shrinking_the_history_cap_evicts_oldest() {
+        let mut t = Term::new(10, 2);
+        for i in 0..20 {
+            run(&mut t, format!("{i}\r\n").as_bytes());
+        }
+        let before = t.history.len();
+        t.history.set_limits(5, 1 << 20);
+        assert_eq!(t.history.len(), 5);
+        assert_eq!(t.history.evicted, (before - 5) as u64);
+    }
+
+    #[test]
     fn cursor_moves_and_erase() {
         let mut t = Term::new(10, 3);
         run(&mut t, b"abcdef\x1b[1;3H\x1b[K");

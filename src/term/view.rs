@@ -326,14 +326,22 @@ define_class!(
 
         #[unsafe(method(performDragOperation:))]
         fn perform_drag_operation(&self, sender: &ProtocolObject<dyn NSDraggingInfo>) -> bool {
-            let text = super::drop::text(&sender.draggingPasteboard());
-            if let Some(text) = &text {
-                if let Some(w) = self.window() {
-                    w.makeFirstResponder(Some(self));
-                }
-                self.paste_text(text);
+            let pb = sender.draggingPasteboard();
+            if let Some(w) = self.window() {
+                w.makeFirstResponder(Some(self));
             }
-            text.is_some()
+            if let Some(text) = super::drop::text(&pb) {
+                self.paste_text(&text);
+                true
+            } else {
+                // Promised files arrive later, once their source has written them.
+                let id = self.ivars().id;
+                super::drop::receive_promises(&pb, move |text| {
+                    if let Some(view) = VIEWS.with(|v| v.borrow().get(&id).and_then(Weak::load)) {
+                        view.paste_text(&text);
+                    }
+                })
+            }
         }
 
         #[unsafe(method(paste:))]

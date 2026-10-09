@@ -252,6 +252,12 @@ impl Workbench {
     }
 
     #[cfg(feature = "selftest")]
+    pub fn viewer_debug(&self) -> String {
+        let app = self.viewer.borrow().as_ref().map(|v| v.app.clone());
+        app.map_or("no viewer".into(), |a| a.debug_scroll())
+    }
+
+    #[cfg(feature = "selftest")]
     pub fn name_active_group(&self, name: &str) {
         let group = self.ws.borrow().active.and_then(|t| self.ws.borrow().group_of(t));
         if let Some(g) = group

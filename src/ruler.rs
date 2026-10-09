@@ -102,8 +102,21 @@ impl LineRuler {
         let digits = starts.len().to_string().len().max(3);
         let digit_w = unsafe { NSString::from_str("8").sizeWithAttributes(Some(&attrs)) }.width;
         let thickness = (digits as f64 * digit_w + 22.0).ceil();
-        if (self.ruleThickness() - thickness).abs() > 0.5 {
+        let old = self.ruleThickness();
+        if (old - thickness).abs() > 0.5 {
+            // Text scrolled fully left sits at x = -gutter; keep it there as
+            // the gutter widens, or its first characters slide under it.
+            let scroll = self.scrollView();
+            let at_rest = scroll
+                .as_ref()
+                .map(|s| s.contentView().bounds().origin)
+                .filter(|o| (o.x + old).abs() < 1.0);
             self.setRuleThickness(thickness);
+            if let (Some(scroll), Some(origin)) = (scroll, at_rest) {
+                let clip = scroll.contentView();
+                clip.scrollToPoint(NSPoint::new(-thickness, origin.y));
+                scroll.reflectScrolledClipView(&clip);
+            }
             return; // retile triggers another draw
         }
 

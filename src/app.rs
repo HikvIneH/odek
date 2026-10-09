@@ -850,6 +850,26 @@ impl App {
         }
     }
 
+    /// Selftest: where the editor is scrolled, for checking jumps.
+    #[cfg(feature = "selftest")]
+    pub fn debug_scroll(&self) -> String {
+        let ui = self.ui();
+        let clip = ui.scroll.contentView();
+        let b = clip.bounds();
+        let i = clip.contentInsets();
+        format!(
+            "clip origin ({:.1},{:.1}) size ({:.1}x{:.1}) insets left {:.1} top {:.1} ruler {:.1} visible {}",
+            b.origin.x,
+            b.origin.y,
+            b.size.width,
+            b.size.height,
+            i.left,
+            i.top,
+            ui.ruler.ruleThickness(),
+            ui.scroll.rulersVisible()
+        )
+    }
+
     /// Keyboard focus to the editor, or the tree when no file is open.
     pub fn focus(&self) {
         let ui = self.ui();

@@ -757,6 +757,9 @@ mod snap {
                 bench.iter().for_each(|b| b.open_in_viewer(&path, line, col));
             }
             "quickopen" => bench.iter().for_each(|b| b.quick_open_here()),
+            "viewerscroll" => bench
+                .iter()
+                .for_each(|b| println!("SNAP viewer {}", b.viewer_debug())),
             "files" => bench.iter().for_each(|b| b.show_files_here()),
             "focusterm" => bench.iter().for_each(|b| b.cycle_pane(false)),
             "frames" => {

@@ -1178,6 +1178,13 @@ impl App {
         text.setAutomaticLinkDetectionEnabled(false);
         text.setSmartInsertDeleteEnabled(false);
         text.setTextContainerInset(NSSize::new(4.0, 6.0));
+        // The cursor blue from the icon (also the Vim block cursor).
+        text.setInsertionPointColor(Some(&NSColor::colorWithSRGBRed_green_blue_alpha(
+            0x3B as f64 / 255.0,
+            0x82 as f64 / 255.0,
+            0xF6 as f64 / 255.0,
+            1.0,
+        )));
         text.setEditable(false);
         text.setDelegate(Some(ProtocolObject::from_ref(self)));
         scroll.setDocumentView(Some(&text));
@@ -2355,6 +2362,23 @@ impl App {
         let r = NSRange::new(target, 0);
         ui.text.setSelectedRange(r);
         ui.text.scrollRangeToVisible(r);
+        // scrollRangeToVisible doesn't know the line-number gutter covers the
+        // clip view's left edge (origin x is -inset at rest), so near the
+        // start of a line it scrolls the first characters under the gutter.
+        // Put x back at rest when the column fits in the visible width.
+        let clip = ui.scroll.contentView();
+        let insets = clip.contentInsets();
+        let mut origin = clip.bounds().origin;
+        let char_w = unsafe {
+            NSString::from_str("M").sizeWithAttributes(Some(&attrs(&[(NSFontAttributeName, &*self.font())])))
+        }
+        .width;
+        let visible = clip.bounds().size.width - insets.left;
+        if (col as f64) * char_w < visible - 4.0 * char_w {
+            origin.x = -insets.left;
+            clip.scrollToPoint(origin);
+            ui.scroll.reflectScrolledClipView(&clip);
+        }
         if let Some(w) = self.host_window() {
             w.makeFirstResponder(Some(&ui.text));
         }

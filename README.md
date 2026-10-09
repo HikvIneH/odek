@@ -1,20 +1,19 @@
 <p align="center">
-  <img src="assets/icon-1024.png" width="128" alt="odek">
+  <img src="assets/odek-lockup.png" width="420" alt="odek">
 </p>
-<h1 align="center"><code>odek</code></h1>
 <p align="center">A tiny, native terminal for macOS, made for running coding agents side by side.<br>
 Grouped tabs, split panes and a built-in code viewer, in about 22 MB.</p>
 
 <p align="center">
   <a href="https://github.com/HikvIneH/odek/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/HikvIneH/odek/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
-  <img alt="Platform: macOS 12+" src="https://img.shields.io/badge/platform-macOS%2012%2B-lightgrey.svg">
-  <img alt="Language: Rust" src="https://img.shields.io/badge/language-Rust-orange.svg">
-  <img alt="UI: AppKit" src="https://img.shields.io/badge/UI-AppKit-black.svg">
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-3B82F6.svg?labelColor=0B0F14"></a>
+  <img alt="Platform: macOS 12+" src="https://img.shields.io/badge/platform-macOS%2012%2B-3B82F6.svg?labelColor=0B0F14">
+  <img alt="Language: Rust" src="https://img.shields.io/badge/language-Rust-3B82F6.svg?labelColor=0B0F14">
+  <img alt="UI: AppKit" src="https://img.shields.io/badge/UI-AppKit-3B82F6.svg?labelColor=0B0F14">
 </p>
 
 <p align="center">
-  <img src="docs/odek-window.png" width="860" alt="Odek: a sidebar of tabs grouped by project, a terminal pane showing git history and files, and the code viewer showing Rust source beside it">
+  <img src="docs/odek-window.png" width="860" alt="odek: a sidebar of tabs grouped by project, a terminal pane showing git history and files, and the code viewer showing Rust source beside it">
 </p>
 
 ## Why
@@ -25,7 +24,7 @@ their own GPU renderer and ship AI and cloud features tend to sit at several
 hundred megabytes and grow into gigabytes after a long session. On an 8 GB
 laptop that is memory your builds and browsers need.
 
-Odek does the everyday job with what macOS already has. AppKit and Core Text
+odek does the everyday job with what macOS already has. AppKit and Core Text
 draw every character, so there is no renderer, font engine or UI toolkit of its
 own to keep in memory. A terminal cell takes 8 bytes, colours are stored once,
 and scrollback has a hard cap, so memory stays flat no matter how much output a
@@ -112,13 +111,13 @@ installs:
 ## Usage
 
 ```sh
-odek                    # open Odek; your tabs come back
+odek                    # open odek; your tabs come back
 odek ~/code/app         # a new tab in that folder
 odek src/main.rs        # the file in the code viewer
 odek --viewer ~/code    # the code viewer in a window of its own
 ```
 
-`odek` hands paths to the Odek that's already running, so everything stays in
+`odek` hands paths to the odek that's already running, so everything stays in
 one window. You can also drop a folder or file on the Dock icon.
 
 ### Tabs and panes
@@ -198,7 +197,7 @@ registers other than the unnamed one.
 
 The code viewer's status bar shows the current branch. `main •  ↓2 ↑1` means
 uncommitted changes (`•`), 2 commits to pull (`↓`, shown in orange) and 1 to
-push (`↑`). Odek runs `git fetch` in the background when a project opens and
+push (`↑`). odek runs `git fetch` in the background when a project opens and
 when you switch back to the app, at most every 5 minutes; fetch never changes
 your files. Click the branch for **Fetch Now** and **Pull (fast-forward only)**,
 which refuses rather than merging when your branch has diverged.
@@ -224,7 +223,7 @@ finishes or needs input if its notification setting is the terminal bell.
 Terminal:
 
 - **Parsing**: the [`vte`](https://crates.io/crates/vte) crate (the parser
-  Alacritty uses) feeds Odek's own screen model.
+  Alacritty uses) feeds odek's own screen model.
 - **8-byte cells**: each cell holds the character, a style index and flags.
   Colours, attributes and hyperlinks are interned once per pane, and emoji
   sequences live in a small shared table.
@@ -286,7 +285,17 @@ scripts/selftest.sh target/release/odek <project> <out-dir> <query> <file>...
 `scripts/install-term-preview.sh` installs a build as a separate
 `Odek Terminal Preview.app`, to try a branch without replacing `Odek.app`.
 
-The icon (a prompt chevron and cursor on an ink tile) is drawn by
+### Brand
+
+The mark is a prompt chevron and a blue cursor on an ink tile; the wordmark is
+`odek` in IBM Plex Mono. Colours: ink `#0B0F14`, foreground `#E6EDF3`, cursor
+blue `#3B82F6`. The terminal's dark theme and cursor use the same colours.
+Assets in `assets/`: `icon-1024.png` and `AppIcon.icns` (app icon),
+`odek-icon.svg`, `odek-mark.svg` (no tile), `odek-lockup.png` and
+`odek-lockup.svg` / `odek-lockup-light.svg` (wordmark; the SVGs need IBM Plex
+Mono installed), and `docs/social-preview.png` for link previews.
+
+The icon is drawn by
 `assets/make-icon.swift`; `assets/make-icns.sh` builds `assets/AppIcon.icns`
 from `assets/icon-1024.png` (`--redraw` regenerates that first). The mark and
 the wordmark are also in `assets/` as SVG (`odek-icon`, `odek-mark`,

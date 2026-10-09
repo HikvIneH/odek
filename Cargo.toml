@@ -1,0 +1,40 @@
+[package]
+name = "odek"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-app-kit = "0.3"
+block2 = "0.6"
+dispatch2 = "0.3"
+tree-sitter = "0.25"
+tree-sitter-highlight = "0.25"
+tree-sitter-go = "0.25"
+tree-sitter-typescript = "0.23"
+tree-sitter-javascript = "0.25"
+tree-sitter-rust = "0.24"
+tree-sitter-swift = "0.7"
+tree-sitter-json = "0.24"
+tree-sitter-md = "0.5"
+tree-sitter-sequel = "0.3"
+codebook-tree-sitter-latex = "0.6"
+tree-sitter-python = "0.25"
+tree-sitter-bash = "0.25"
+tree-sitter-css = "0.25"
+tree-sitter-html = "0.23"
+tree-sitter-yaml = "0.7"
+nucleo-matcher = "0.3"
+ignore = "0.4"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[features]
+# Compiles the scripted UI test driven by scripts/selftest.sh.
+selftest = []

@@ -200,7 +200,7 @@ define_class!(
         #[unsafe(method(applicationDidFinishLaunching:))]
         fn did_finish_launching(&self, _n: &NSNotification) {
             if self.ivars().tree.borrow().is_none() {
-                let arg = std::env::args().skip(1).find(|a| !a.starts_with("-psn"));
+                let arg = std::env::args().skip(1).find(|a| !a.starts_with('-'));
                 let last = NSUserDefaults::standardUserDefaults()
                     .stringForKey(ns_string!("lastFolder"))
                     .map(|s| s.to_string());
@@ -721,7 +721,9 @@ impl App {
         let this = Self::new(mtm);
         let root: Retained<Backdrop> = unsafe { msg_send![Backdrop::alloc(mtm), initWithFrame: frame] };
         // Without this (macOS 14+) the fill spills over the pane header.
-        root.setClipsToBounds(true);
+        if root.respondsToSelector(objc2::sel!(setClipsToBounds:)) {
+            root.setClipsToBounds(true);
+        }
         let root = Retained::into_super(root);
         root.setAutoresizingMask(
             NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,

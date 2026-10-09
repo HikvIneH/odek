@@ -8,7 +8,7 @@ shift 4
 files=$(IFS=,; echo "$*")
 rm -rf "$out"
 mkdir -p "$out"
-SELFTEST_DIR="$out" SELFTEST_QUERY="$query" SELFTEST_FILES="$files" "$bin" "$project" > "$out/log.txt" 2>&1 &
+SELFTEST_DIR="$out" SELFTEST_QUERY="$query" SELFTEST_FILES="$files" "$bin" --viewer "$project" > "$out/log.txt" 2>&1 &
 pid=$!
 # The test prints "done" then idles 4 s: measure memory in that window.
 for _ in $(seq 1 60); do

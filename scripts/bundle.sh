@@ -65,10 +65,19 @@ if [ "${1:-}" = "--install" ]; then
   cp -R "$app" ~/Applications/
   cat > ~/.local/bin/"$BIN" <<SH
 #!/bin/bash
-# Open a folder (default: current directory) or file in $APP.
-target=\$(cd "\$(dirname "\${1:-.}")" && pwd)/\$(basename "\${1:-.}")
-[ "\${1:-.}" = "." ] && target=\$PWD
-exec open -n -a "\$HOME/Applications/$APP.app" --args "\$target"
+# $BIN               open $APP (your tabs come back)
+# $BIN <folder>      a new tab in that folder
+# $BIN <file>        the file in the code viewer
+# $BIN --viewer [p]  the code viewer in a window of its own
+app="\$HOME/Applications/$APP.app"
+abs() { (cd "\$(dirname "\$1")" && printf '%s/%s' "\$(pwd)" "\$(basename "\$1")"); }
+if [ "\${1:-}" = "--viewer" ]; then
+  target=\$(abs "\${2:-.}"); [ "\${2:-.}" = "." ] && target=\$PWD
+  exec open -n -a "\$app" --args --viewer "\$target"
+fi
+[ -z "\${1:-}" ] && exec open -a "\$app"
+target=\$(abs "\$1"); [ "\$1" = "." ] && target=\$PWD
+exec open -a "\$app" "\$target"
 SH
   chmod +x ~/.local/bin/"$BIN"
   echo "installed ~/Applications/$APP.app and ~/.local/bin/$BIN"

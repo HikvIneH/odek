@@ -19,19 +19,18 @@ pub static STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLoc
 
 fn main() {
     STARTED.get_or_init(std::time::Instant::now);
-    // `odek --term [dir]`, or the binary installed as `odek-term`: terminal
-    // windows (in progress).
-    let exe = std::env::args().next().unwrap_or_default();
-    let as_term = exe.rsplit('/').next() == Some("odek-term");
-    let mut args = std::env::args()
+    // `odek [folder|file]` is the terminal; `odek --viewer [folder|file]`
+    // the code viewer in a window of its own.
+    let args: Vec<String> = std::env::args()
         .skip(1)
         .filter(|a| !a.starts_with("-psn"))
-        .peekable();
-    if as_term || args.peek().map(String::as_str) == Some("--term") {
-        if !as_term {
-            args.next();
-        }
-        return term::app::run(args.next().map(std::path::PathBuf::from));
+        .collect();
+    if args.first().map(String::as_str) != Some("--viewer") {
+        let open = args
+            .iter()
+            .find(|a| !a.starts_with('-'))
+            .map(std::path::PathBuf::from);
+        return term::app::run(open);
     }
     let mtm = MainThreadMarker::new().expect("must run on the main thread");
     let app = NSApplication::sharedApplication(mtm);

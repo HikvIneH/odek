@@ -15,7 +15,7 @@ use objc2_app_kit::{
     NSRequestUserAttentionType, NSTextFinderAction, NSWindow, NSWindowDelegate, NSWindowStyleMask,
     NSWorkspace,
 };
-use objc2_foundation::{NSNotification, NSPoint, NSRect, NSSize, NSString, NSURL, NSUserDefaults};
+use objc2_foundation::{NSArray, NSNotification, NSPoint, NSRect, NSSize, NSString, NSURL, NSUserDefaults};
 
 use super::view::{TermView, ViewEvent};
 use super::window::Workbench;
@@ -41,6 +41,8 @@ pub struct Ivars {
     open_dir: Option<PathBuf>,
     panes: RefCell<Vec<Pane>>,
     bench: OnceCell<Rc<Workbench>>,
+    /// Paths that arrived (Finder, `open -a`) before the window existed.
+    pending: RefCell<Vec<PathBuf>>,
 }
 
 define_class!(
@@ -62,6 +64,9 @@ define_class!(
             }
             let bench = Workbench::new(ProtocolObject::from_ref(self), self.mtm());
             bench.start(self.ivars().open_dir.clone(), true);
+            for path in self.ivars().pending.take() {
+                bench.open_path(&path);
+            }
             let _ = self.ivars().bench.set(bench);
             tick();
             app.activate();
@@ -70,6 +75,17 @@ define_class!(
         #[unsafe(method(applicationShouldTerminateAfterLastWindowClosed:))]
         fn terminate_after_last_window(&self, _app: &NSApplication) -> bool {
             true
+        }
+
+        #[unsafe(method(application:openURLs:))]
+        fn open_urls(&self, _app: &NSApplication, urls: &NSArray<NSURL>) {
+            for url in urls.iter() {
+                let Some(path) = url.to_file_path() else { continue };
+                match self.ivars().bench.get() {
+                    Some(b) => b.open_path(&path),
+                    None => self.ivars().pending.borrow_mut().push(path.to_path_buf()),
+                }
+            }
         }
 
         #[unsafe(method(applicationDidBecomeActive:))]
@@ -251,6 +267,7 @@ impl TermApp {
             open_dir,
             panes: RefCell::new(Vec::new()),
             bench: OnceCell::new(),
+            pending: RefCell::new(Vec::new()),
         });
         let this: Retained<Self> = unsafe { msg_send![super(this), init] };
         INSTANCE.with(|i| {
@@ -512,7 +529,7 @@ impl TermApp {
                     item("Toggle Word Wrap", Some(sel!(appToggleWrap:)), "z", opt),
                     vim,
                     sep(),
-                    item("Bigger", Some(sel!(termZoomIn:)), "+", cmd),
+                    item("Bigger", Some(sel!(termZoomIn:)), "=", cmd),
                     item("Smaller", Some(sel!(termZoomOut:)), "-", cmd),
                     item("Actual Size", Some(sel!(termZoomReset:)), "0", cmd),
                 ],
@@ -678,6 +695,7 @@ mod snap {
             "newtab" => bench.iter().for_each(|b| b.new_tab()),
             "split" => bench.iter().for_each(|b| b.split(arg != "down")),
             "rename" => bench.iter().for_each(|b| b.name_active_tab(arg)),
+            "renamegroup" => bench.iter().for_each(|b| b.name_active_group(arg)),
             "group" => bench.iter().for_each(|b| b.move_active_to_new_group(arg)),
             "nexttab" => bench.iter().for_each(|b| b.cycle_tab(true)),
             "open" => {
@@ -720,6 +738,7 @@ mod snap {
                 }
             }
             "snapws" => {
+                bench.iter().for_each(|b| b.tick());
                 if let Some(content) = bench.as_ref().and_then(|b| b.window.contentView()) {
                     snapshot(&content, &out.join(format!("{arg}.png")));
                     println!("SNAP {arg}: footprint {:.1} MB", footprint_mb());

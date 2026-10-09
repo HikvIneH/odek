@@ -186,7 +186,8 @@ impl Workbench {
                 }
             }
         }
-        if let Some(dir) = open {
+        let file = open.as_ref().filter(|p| p.is_file()).cloned();
+        if let Some(dir) = open.filter(|p| !p.is_file()) {
             self.new_tab_in(&dir);
         }
         self.show_active();
@@ -194,6 +195,23 @@ impl Workbench {
             self.window.makeKeyAndOrderFront(None);
         }
         self.focus_active_pane();
+        if let Some(file) = file {
+            self.open_in_viewer(&file, None, None);
+        }
+    }
+
+    /// A folder or file handed to the running app (`odek <path>`, Finder,
+    /// the Dock): a new tab, or the file in the viewer.
+    pub fn open_path(&self, path: &Path) {
+        if path.is_dir() {
+            self.new_tab_in(path);
+            self.show_active();
+            self.focus_active_pane();
+            self.save();
+        } else {
+            self.open_in_viewer(path, None, None);
+        }
+        self.window.makeKeyAndOrderFront(None);
     }
 
     #[cfg_attr(not(feature = "selftest"), allow(dead_code))]
@@ -204,10 +222,22 @@ impl Workbench {
 
     #[cfg(feature = "selftest")]
     pub fn name_active_tab(&self, name: &str) {
-        if let Some(a) = self.ws.borrow().active
+        let active = self.ws.borrow().active;
+        if let Some(a) = active
             && let Some(t) = self.ws.borrow_mut().tab_mut(a)
         {
             t.name = Some(name.to_string());
+        }
+        self.refresh();
+    }
+
+    #[cfg(feature = "selftest")]
+    pub fn name_active_group(&self, name: &str) {
+        let group = self.ws.borrow().active.and_then(|t| self.ws.borrow().group_of(t));
+        if let Some(g) = group
+            && let Some(g) = self.ws.borrow_mut().groups.iter_mut().find(|x| x.id == g)
+        {
+            g.name = name.to_string();
         }
         self.refresh();
     }
@@ -819,7 +849,8 @@ impl Workbench {
     }
 
     pub fn request_close_active_tab(&self) {
-        if let Some(t) = self.ws.borrow().active {
+        let active = self.ws.borrow().active;
+        if let Some(t) = active {
             self.request_close_tab(t);
         }
     }
@@ -920,7 +951,8 @@ impl Workbench {
     }
 
     pub fn rename_active_tab(&self) {
-        if let Some(t) = self.ws.borrow().active {
+        let active = self.ws.borrow().active;
+        if let Some(t) = active {
             self.rename_tab(t);
         }
     }

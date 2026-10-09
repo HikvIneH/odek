@@ -441,7 +441,11 @@ impl TermView {
         let this: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame] };
         // Since macOS 14 views draw outside their bounds unless told not to;
         // the background fill would cover neighbours such as pane headers.
-        this.setClipsToBounds(true);
+        // (Older macOS clips by default and lacks the setter.)
+        let base: &NSView = &this;
+        if objc2_foundation::NSObjectProtocol::respondsToSelector(base, objc2::sel!(setClipsToBounds:)) {
+            this.setClipsToBounds(true);
+        }
         VIEWS.with(|v| v.borrow_mut().insert(id, Weak::from_retained(&this)));
         this.update_theme();
         let opts = NSTrackingAreaOptions::MouseMoved

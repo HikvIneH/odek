@@ -11,15 +11,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use dispatch2::{DispatchQueue, DispatchTime};
 use objc2::AnyThread;
 use objc2::rc::{Retained, Weak};
-use objc2::runtime::{AnyObject, NSObject};
+use objc2::runtime::{AnyObject, NSObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
 use objc2_app_kit::{
     NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSBezierPath, NSColor,
-    NSCompositingOperation, NSCursor, NSEvent, NSEventModifierFlags, NSFont, NSFontAttributeName,
-    NSFontManager, NSFontTraitMask, NSFontWeightRegular, NSForegroundColorAttributeName, NSPasteboard,
-    NSPasteboardTypeString, NSRectFillUsingOperation, NSResponder, NSStrikethroughStyleAttributeName,
-    NSStringDrawing, NSTextInputClient, NSTrackingArea, NSTrackingAreaOptions, NSUnderlineStyleAttributeName,
-    NSView, NSWorkspace,
+    NSCompositingOperation, NSCursor, NSDragOperation, NSDraggingInfo, NSEvent, NSEventModifierFlags, NSFont,
+    NSFontAttributeName, NSFontManager, NSFontTraitMask, NSFontWeightRegular, NSForegroundColorAttributeName,
+    NSPasteboard, NSPasteboardTypeString, NSRectFillUsingOperation, NSResponder,
+    NSStrikethroughStyleAttributeName, NSStringDrawing, NSTextInputClient, NSTrackingArea,
+    NSTrackingAreaOptions, NSUnderlineStyleAttributeName, NSView, NSWorkspace,
 };
 use objc2_foundation::{
     NSArray, NSDictionary, NSNumber, NSPoint, NSRange, NSRangePointer, NSRect, NSSize, NSString, NSUInteger,
@@ -319,6 +319,23 @@ define_class!(
             }
         }
 
+        #[unsafe(method(draggingEntered:))]
+        fn dragging_entered(&self, _sender: &ProtocolObject<dyn NSDraggingInfo>) -> NSDragOperation {
+            NSDragOperation::Copy
+        }
+
+        #[unsafe(method(performDragOperation:))]
+        fn perform_drag_operation(&self, sender: &ProtocolObject<dyn NSDraggingInfo>) -> bool {
+            let text = super::drop::text(&sender.draggingPasteboard());
+            if let Some(text) = &text {
+                if let Some(w) = self.window() {
+                    w.makeFirstResponder(Some(self));
+                }
+                self.paste_text(text);
+            }
+            text.is_some()
+        }
+
         #[unsafe(method(paste:))]
         fn paste(&self, _sender: Option<&AnyObject>) {
             let pb = NSPasteboard::generalPasteboard();
@@ -552,6 +569,7 @@ impl TermView {
             )
         };
         this.addTrackingArea(&area);
+        this.registerForDraggedTypes(&super::drop::types());
         this
     }
 

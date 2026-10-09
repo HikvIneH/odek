@@ -1,28 +1,84 @@
 //! Drag and drop onto a terminal, as Terminal.app and Warp do it: files
-//! become their shell-escaped paths; raw image data (from a browser or a
-//! screenshot thumbnail) is saved as a PNG in the temp dir and becomes that
-//! path, so tools like Claude Code can pick the image up.
+//! become their shell-escaped paths; raw image data (from a browser) is saved
+//! as a PNG in the temp dir and becomes that path, so tools like Claude Code
+//! can pick the image up. Promised files (the screenshot thumbnail, Photos,
+//! Mail attachments: the file doesn't exist until it's dropped) are written
+//! to a fresh temp folder and become their paths once written.
 
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use std::ptr::NonNull;
+
+use block2::RcBlock;
 use objc2::rc::Retained;
+use objc2::{ClassType, Message};
 use objc2_app_kit::{
-    NSBitmapImageFileType, NSBitmapImageRep, NSPasteboard, NSPasteboardType, NSPasteboardTypeFileURL,
-    NSPasteboardTypePNG, NSPasteboardTypeString, NSPasteboardTypeTIFF,
+    NSBitmapImageFileType, NSBitmapImageRep, NSFilePromiseReceiver, NSPasteboard, NSPasteboardType,
+    NSPasteboardTypeFileURL, NSPasteboardTypePNG, NSPasteboardTypeString, NSPasteboardTypeTIFF,
 };
-use objc2_foundation::{NSArray, NSDictionary, NSURL};
+use objc2_foundation::{NSArray, NSDictionary, NSError, NSOperationQueue, NSURL};
 
 /// The pasteboard types a terminal view accepts.
 pub fn types() -> Retained<NSArray<NSPasteboardType>> {
-    unsafe {
-        NSArray::from_slice(&[
-            NSPasteboardTypeFileURL,
-            NSPasteboardTypePNG,
-            NSPasteboardTypeTIFF,
-            NSPasteboardTypeString,
-        ])
+    let mut types: Vec<Retained<NSPasteboardType>> = unsafe {
+        vec![
+            NSPasteboardTypeFileURL.retain(),
+            NSPasteboardTypePNG.retain(),
+            NSPasteboardTypeTIFF.retain(),
+            NSPasteboardTypeString.retain(),
+        ]
+    };
+    types.extend(NSFilePromiseReceiver::readableDraggedTypes().iter());
+    NSArray::from_retained_slice(&types)
+}
+
+/// Ask the sources of promised files in `pb` to write them, then call
+/// `typed` on the main thread with each file's escaped path and a space.
+/// False when `pb` holds no promises.
+pub fn receive_promises(pb: &NSPasteboard, typed: impl Fn(String) + 'static) -> bool {
+    let classes = NSArray::from_slice(&[NSFilePromiseReceiver::class()]);
+    let Some(promises) = (unsafe { pb.readObjectsForClasses_options(&classes, None) }) else {
+        return false;
+    };
+    let promises: Vec<_> = promises
+        .iter()
+        .filter_map(|o| o.downcast::<NSFilePromiseReceiver>().ok())
+        .collect();
+    if promises.is_empty() {
+        return false;
     }
+    let Some(ms) = SystemTime::now().duration_since(UNIX_EPOCH).ok().map(|d| d.as_millis()) else {
+        return false;
+    };
+    let dir = std::env::temp_dir().join(format!("odek-drop-{ms}"));
+    if std::fs::create_dir_all(&dir).is_err() {
+        return false;
+    }
+    let Some(dest) = NSURL::from_directory_path(&dir) else {
+        return false;
+    };
+    let typed = std::rc::Rc::new(typed);
+    let queue = NSOperationQueue::mainQueue();
+    for p in promises {
+        let typed = typed.clone();
+        let reader = RcBlock::new(move |url: NonNull<NSURL>, err: *mut NSError| {
+            if err.is_null()
+                && let Some(path) = unsafe { url.as_ref() }.path()
+            {
+                typed(format!("{} ", quote(&path.to_string())));
+            }
+        });
+        unsafe {
+            p.receivePromisedFilesAtDestination_options_operationQueue_reader(
+                &dest,
+                &NSDictionary::new(),
+                &queue,
+                &reader,
+            )
+        };
+    }
+    true
 }
 
 /// What dropping `pb` should type: escaped paths followed by a space, or the

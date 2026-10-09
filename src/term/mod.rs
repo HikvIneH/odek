@@ -4,6 +4,7 @@ mod find;
 mod findbar;
 pub mod grid;
 pub mod input;
+pub mod links;
 pub mod session;
 mod sidebar;
 mod target;

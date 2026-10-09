@@ -9,9 +9,9 @@ use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol, ProtocolObject, Sel}
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSApplication, NSApplicationDelegate, NSBackingStoreType, NSEventModifierFlags, NSMenu, NSMenuItem,
-    NSRequestUserAttentionType, NSWindow, NSWindowDelegate, NSWindowStyleMask,
+    NSRequestUserAttentionType, NSWindow, NSWindowDelegate, NSWindowStyleMask, NSWorkspace,
 };
-use objc2_foundation::{NSNotification, NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{NSNotification, NSPoint, NSRect, NSSize, NSString, NSURL};
 
 use super::view::{TermView, ViewEvent};
 
@@ -169,6 +169,12 @@ impl TermApp {
                 }
                 ViewEvent::Exited(_) => window.close(),
                 ViewEvent::Focused => {}
+                // Default app for now; an in-app editor can take over later.
+                ViewEvent::OpenPath { path, .. } => {
+                    if let Some(url) = path.to_str().map(|p| NSURL::fileURLWithPath(&NSString::from_str(p))) {
+                        NSWorkspace::sharedWorkspace().openURL(&url);
+                    }
+                }
             }
         });
         if let Err(e) = view.start(dir, command) {
@@ -360,6 +366,12 @@ mod snap {
                     if let Some(win) = view.window() {
                         win.setContentSize(objc2_foundation::NSSize::new(w.ceil(), h.ceil()));
                     }
+                }
+            }
+            "hover" | "linkat" => {
+                let mut n = arg.split_whitespace().filter_map(|v| v.parse::<usize>().ok());
+                if let (Some(c), Some(r)) = (n.next(), n.next()) {
+                    println!("SNAP {verb} {c} {r}: {}", view.probe_link(c, r, verb == "hover"));
                 }
             }
             "snap" => {

@@ -29,6 +29,8 @@ pub struct Style {
     pub fg: Color,
     pub bg: Color,
     pub attrs: u16,
+    /// OSC 8 hyperlink: index into `Term::link`, 0 = none.
+    pub link: u16,
 }
 
 pub mod flag {

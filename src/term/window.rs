@@ -204,7 +204,9 @@ impl Workbench {
         label.setFont(Some(&NSFont::systemFontOfSize(11.5)));
         label.setTextColor(Some(&NSColor::secondaryLabelColor()));
         label.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
-        unsafe { label.cell() }.map(|c| c.setLineBreakMode(objc2_app_kit::NSLineBreakMode::ByTruncatingTail));
+        if let Some(c) = label.cell() {
+            c.setLineBreakMode(objc2_app_kit::NSLineBreakMode::ByTruncatingTail);
+        }
         header.addSubview(&label);
         let close = NSButton::initWithFrame(
             NSButton::alloc(mtm),
@@ -273,6 +275,13 @@ impl Workbench {
                 }
             }
             ViewEvent::Exited(_) => self.close_pane(id),
+            // Default app for now; the code viewer takes this over next.
+            ViewEvent::OpenPath { path, .. } => {
+                if let Some(p) = path.to_str() {
+                    let url = objc2_foundation::NSURL::fileURLWithPath(&NSString::from_str(p));
+                    objc2_app_kit::NSWorkspace::sharedWorkspace().openURL(&url);
+                }
+            }
             ViewEvent::Focused => {
                 let tab = self.ws.borrow().tab_of_pane(id);
                 if let Some(tab) = tab {

@@ -398,7 +398,10 @@ impl Term {
     /// that send prompt marks supply better ones.
     pub fn mark_return(&mut self) {
         if !self.alt_active && !self.shell_marks {
-            self.add_mark(self.cursor_line_id());
+            // A multi-line prompt (rule line above the input) is marked at
+            // its top, so clearing to it takes the whole prompt along.
+            let row = self.prompt_rows().unwrap_or(self.cursor.row);
+            self.add_mark(self.cursor_line_id() - (self.cursor.row - row) as u64);
         }
     }
 
@@ -414,10 +417,8 @@ impl Term {
 
     /// Where the current prompt starts: the line Clear to Previous Mark stops at.
     fn prompt_start_id(&self) -> u64 {
-        match self.prompts.back() {
-            Some(&id) if self.shell_marks && self.in_prompt => id.min(self.cursor_line_id()),
-            _ => self.cursor_line_id(),
-        }
+        let row = self.prompt_rows().unwrap_or(self.cursor.row);
+        self.cursor_line_id() - (self.cursor.row - row) as u64
     }
 
     /// Remove the lines from the latest mark before the current prompt up to
@@ -485,13 +486,7 @@ impl Term {
         if self.alt_active {
             return;
         }
-        let top = self.cursor_line_id() - self.cursor.row as u64;
-        let row = match self.prompts.back() {
-            Some(&id) if self.shell_marks && self.in_prompt => {
-                (id.saturating_sub(top) as usize).min(self.cursor.row)
-            }
-            _ => self.cursor.row,
-        };
+        let row = self.prompt_rows().unwrap_or(self.cursor.row);
         for line in self.main.lines.drain(..row) {
             self.history.push(line.trimmed());
         }
@@ -1850,6 +1845,27 @@ mod tests {
 
     /// A two-line prompt (top rule as wide as the screen, then `> `) keeps its
     /// two lines through a resize, so the shell's redraw lands on it.
+    /// powerlevel10k-style two-line prompt, no prompt marks: ⌘L takes the
+    /// previous prompt (both lines), its command and output, and leaves the
+    /// current prompt whole.
+    #[test]
+    fn clear_to_mark_with_two_line_prompt() {
+        let mut t = Term::new(20, 10);
+        let prompt = |t: &mut Term| {
+            run(t, "-".repeat(20).as_bytes());
+            run(t, b"\r\n> ");
+        };
+        run(&mut t, b"earlier\r\n");
+        prompt(&mut t);
+        run(&mut t, b"echo hi");
+        t.mark_return();
+        run(&mut t, b"\r\nhi\r\n");
+        prompt(&mut t);
+        assert!(t.clear_to_mark());
+        let text: Vec<String> = screen(&t).into_iter().filter(|l| !l.is_empty()).collect();
+        assert_eq!(text, ["earlier", &"-".repeat(20), ">"]);
+    }
+
     #[test]
     fn prompt_lines_are_not_rewrapped() {
         let mut t = Term::new(40, 6);

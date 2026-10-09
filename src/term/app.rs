@@ -232,6 +232,11 @@ define_class!(
             self.with_bench(|b| b.show_files_here());
         }
 
+        #[unsafe(method(termShowShortcuts:))]
+        fn menu_show_shortcuts(&self, _sender: Option<&AnyObject>) {
+            super::shortcuts::toggle(self.mtm());
+        }
+
         #[unsafe(method(termSearchTabs:))]
         fn menu_search_tabs(&self, _sender: Option<&AnyObject>) {
             self.with_bench(|b| b.search_tabs());
@@ -610,6 +615,18 @@ impl TermApp {
                 }
                 items
             }),
+            // ⌘/ lives on Edit ▸ Toggle Line Comment: a terminal answers that
+            // item by showing this panel (and renames it), the code viewer by
+            // commenting. Two items can't share a key equivalent.
+            menu(
+                "Help",
+                vec![item(
+                    "Keyboard Shortcuts",
+                    Some(sel!(termShowShortcuts:)),
+                    "",
+                    cmd,
+                )],
+            ),
         ] {
             bar.addItem(&m);
         }
@@ -861,6 +878,48 @@ mod snap {
                 std::fs::write(out.join(format!("{arg}.txt")), view.all_text()).ok();
             }
             "settings" => super::super::settings::show(app_mtm()),
+            // menukey <char> [ctrl|opt|shift|cmd …]: a real key event through the menus.
+            "menukey" => {
+                let mut parts = arg.split_whitespace();
+                let ch = parts.next().unwrap_or("");
+                let mut mods = objc2_app_kit::NSEventModifierFlags::empty();
+                for m in parts {
+                    mods |= match m {
+                        "ctrl" => objc2_app_kit::NSEventModifierFlags::Control,
+                        "opt" => objc2_app_kit::NSEventModifierFlags::Option,
+                        "shift" => objc2_app_kit::NSEventModifierFlags::Shift,
+                        _ => objc2_app_kit::NSEventModifierFlags::Command,
+                    };
+                }
+                let chars = objc2_foundation::NSString::from_str(ch);
+                let window = view.window();
+                let event = objc2_app_kit::NSEvent::keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode(
+                    objc2_app_kit::NSEventType::KeyDown,
+                    objc2_foundation::NSPoint::new(0.0, 0.0),
+                    mods,
+                    0.0,
+                    window.as_ref().map_or(0, |w| w.windowNumber()),
+                    None,
+                    &chars,
+                    &chars,
+                    false,
+                    0,
+                );
+                if let Some(event) = event {
+                    let handled = objc2_app_kit::NSApplication::sharedApplication(app_mtm())
+                        .mainMenu()
+                        .is_some_and(|m| m.performKeyEquivalent(&event));
+                    println!(
+                        "SNAP menukey {arg}: handled {handled}, shortcuts panel {}",
+                        super::super::shortcuts::is_visible()
+                    );
+                }
+            }
+            "snapshortcuts" => {
+                if let Some(content) = super::super::shortcuts::content_view() {
+                    snapshot(&content, &out.join(format!("{arg}.png")));
+                }
+            }
             "setting" => {
                 let (name, value) = arg.split_once(' ').unwrap_or((arg, ""));
                 super::super::settings::set_raw(name, value);

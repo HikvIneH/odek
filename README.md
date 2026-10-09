@@ -50,9 +50,11 @@ session produces.
 - **Unicode**: wide CJK characters, emoji with skin tones and joined sequences, combining accents, input methods and the emoji picker
 - **Clean lines**: box-drawing and block characters are drawn as shapes, so borders and logos join without gaps in any font
 - **Nerd Font icons**: uses MesloLGS NF (or another Nerd Font) when installed, so prompt themes like powerlevel10k show their icons
-- **Scrollback** of 10,000 lines per pane, find (⌘F) with every match highlighted, selection by word or line, ⌘K to clear
+- **Scrollback** of 10,000 lines per pane, find (⌘F) with every match highlighted, selection by word or line
+- **Terminal.app's commands**: ⌘L clears the last command and its output, ⌘↑/⌘↓ jump between commands, ⌃⌘L, ⌘K and ⌥⌘K clear the screen or scrollback
+- **Keyboard Shortcuts** (⌘/): every command and its keys in a panel
 - **Links**: ⌘-click URLs and file paths, including `path:line:col` and the hyperlinks Claude Code prints
-- **Settings** (⌘,): font, size, light/dark/system theme, scrollback length, and whether Option sends Meta
+- **Settings** (⌘,): font, size, light/dark/system theme, window opacity with optional blur, scrollback length, and whether Option sends Meta
 
 ### Code viewer
 
@@ -134,6 +136,7 @@ one window. You can also drop a folder or file on the Dock icon.
 | ⇧⌘R | Rename tab (an empty name follows the program's title) |
 | ⌘B, ⇧⌘F | Toggle sidebar, search tabs |
 | ⌘, | Settings |
+| ⌘/ | Keyboard Shortcuts: every command and its keys (in the code viewer, ⌘/ toggles a comment) |
 
 Right-click a tab or group for more: move a tab to another group, rename or
 delete a group (its tabs are kept).
@@ -216,6 +219,8 @@ which refuses rather than merging when your branch has diverged.
 - **Font size** (⌘= and ⌘- change one pane for the moment; ⌘0 goes back)
 - **Theme**: follow the system, or always light or dark
 - **Scrollback**: 1,000 to 50,000 lines per pane (8 MB per 10,000 lines at most)
+- **Opacity**: 50–100 %; only the terminal background fades (text and the
+  code viewer stay solid), with an optional blur of what's behind the window
 - **Option sends Meta**: on, Option+key sends Esc+key as most shells and
   agents expect; off, Option types characters such as ™ and accents
 

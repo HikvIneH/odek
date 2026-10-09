@@ -295,6 +295,21 @@ define_class!(
             self.handle_scroll(event);
         }
 
+        /// ⌘/ shares Edit ▸ Toggle Line Comment with the code viewer; in a
+        /// terminal it opens the Keyboard Shortcuts panel.
+        #[unsafe(method(appToggleComment:))]
+        fn show_shortcuts(&self, _sender: Option<&AnyObject>) {
+            super::shortcuts::toggle(self.mtm());
+        }
+
+        #[unsafe(method(validateMenuItem:))]
+        fn validate_menu_item(&self, item: &objc2_app_kit::NSMenuItem) -> bool {
+            if item.action() == Some(objc2::sel!(appToggleComment:)) {
+                item.setTitle(&NSString::from_str("Keyboard Shortcuts"));
+            }
+            true
+        }
+
         #[unsafe(method(copy:))]
         fn copy(&self, _sender: Option<&AnyObject>) {
             if let Some(text) = self.selected_text() {

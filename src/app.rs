@@ -523,6 +523,15 @@ define_class!(
             self.go_to_line();
         }
 
+        #[unsafe(method(validateMenuItem:))]
+        fn validate_menu_item(&self, item: &NSMenuItem) -> bool {
+            // A terminal renames ⌘/ to Keyboard Shortcuts; here it comments.
+            if item.action() == Some(sel!(appToggleComment:)) {
+                item.setTitle(ns_string!("Toggle Line Comment"));
+            }
+            true
+        }
+
         #[unsafe(method(appToggleComment:))]
         fn menu_toggle_comment(&self, _sender: Option<&AnyObject>) {
             self.toggle_comment();

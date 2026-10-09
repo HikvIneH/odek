@@ -36,7 +36,7 @@ pub fn encode_key(chars: &str, bare: &str, mods: Mods, app_cursor: bool) -> Opti
     let csi = |s: &str| Some(format!("\x1b[{s}").into_bytes());
 
     if mods.cmd {
-        // Warp/iTerm conventions for line editing.
+        // The usual macOS terminal conventions for line editing.
         return match key {
             LEFT => Some(vec![0x01]),
             RIGHT => Some(vec![0x05]),

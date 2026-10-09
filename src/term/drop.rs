@@ -1,4 +1,4 @@
-//! Drag and drop onto a terminal, as Terminal.app and Warp do it: files
+//! Drag and drop onto a terminal, as in Terminal.app: files
 //! become their shell-escaped paths; raw image data (from a browser) is saved
 //! as a PNG in the temp dir and becomes that path, so tools like Claude Code
 //! can pick the image up. Promised files (the screenshot thumbnail, Photos,

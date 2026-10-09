@@ -140,7 +140,7 @@ one window. You can also drop a folder or file on the Dock icon.
 | Key | Action |
 |---|---|
 | ⌘T | New tab in the current folder and group |
-| ⌘O | Open a folder as a new tab, or a file in the code viewer |
+| ⌘O | New tab in a folder you pick (a file you pick opens in the code viewer) |
 | ⇧⌘N | New group |
 | ⌘D / ⇧⌘D | Split right / split down |
 | ⌘W / ⇧⌘W | Close pane (in the code viewer: the file, then the pane) / close tab |

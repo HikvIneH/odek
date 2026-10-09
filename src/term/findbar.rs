@@ -8,9 +8,10 @@ use objc2::rc::{Retained, Weak};
 use objc2::runtime::{Bool, NSObject, NSObjectProtocol, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSApplication, NSAutoresizingMaskOptions, NSBezelStyle, NSBezierPath, NSButton, NSColor, NSControl, NSControlSize,
-    NSControlTextEditingDelegate, NSEventModifierFlags, NSFont, NSSearchField, NSSearchFieldDelegate, NSTextField, NSTextFieldDelegate,
-    NSTextView, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,
+    NSApplication, NSAutoresizingMaskOptions, NSBezelStyle, NSBezierPath, NSButton, NSColor, NSControl,
+    NSControlSize, NSControlTextEditingDelegate, NSEventModifierFlags, NSFont, NSSearchField,
+    NSSearchFieldDelegate, NSTextField, NSTextFieldDelegate, NSTextView, NSView, NSVisualEffectBlendingMode,
+    NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,
 };
 use objc2_foundation::{NSNotification, NSPoint, NSRect, NSSize, NSString};
 
@@ -98,17 +99,26 @@ pub(super) fn open(v: &TermView) {
         return;
     }
     let mtm = MainThreadMarker::from(v);
-    let Some(me) = (unsafe { Retained::retain(v as *const TermView as *mut TermView) }) else { return };
-    let this = Target::alloc(mtm).set_ivars(TargetIvars { view: Weak::from_retained(&me) });
+    let Some(me) = (unsafe { Retained::retain(v as *const TermView as *mut TermView) }) else {
+        return;
+    };
+    let this = Target::alloc(mtm).set_ivars(TargetIvars {
+        view: Weak::from_retained(&me),
+    });
     let target: Retained<Target> = unsafe { msg_send![super(this), init] };
 
     let width = v.bounds().size.width;
-    let frame = NSRect::new(NSPoint::new((width - BAR_W - 12.0).max(0.0), 8.0), NSSize::new(BAR_W, BAR_H));
+    let frame = NSRect::new(
+        NSPoint::new((width - BAR_W - 12.0).max(0.0), 8.0),
+        NSSize::new(BAR_W, BAR_H),
+    );
     let bar = NSVisualEffectView::initWithFrame(NSVisualEffectView::alloc(mtm), frame);
     bar.setMaterial(NSVisualEffectMaterial::HUDWindow);
     bar.setBlendingMode(NSVisualEffectBlendingMode::WithinWindow);
     bar.setState(NSVisualEffectState::Active);
-    bar.setAutoresizingMask(NSAutoresizingMaskOptions::ViewMinXMargin | NSAutoresizingMaskOptions::ViewMaxYMargin);
+    bar.setAutoresizingMask(
+        NSAutoresizingMaskOptions::ViewMinXMargin | NSAutoresizingMaskOptions::ViewMaxYMargin,
+    );
 
     let field = NSSearchField::initWithFrame(
         NSSearchField::alloc(mtm),
@@ -125,7 +135,12 @@ pub(super) fn open(v: &TermView) {
 
     let button = |title: &str, x: f64, action: Sel| {
         let b = unsafe {
-            NSButton::buttonWithTitle_target_action(&NSString::from_str(title), Some(&target), Some(action), mtm)
+            NSButton::buttonWithTitle_target_action(
+                &NSString::from_str(title),
+                Some(&target),
+                Some(action),
+                mtm,
+            )
         };
         b.setFrame(NSRect::new(NSPoint::new(x, 4.0), NSSize::new(24.0, 22.0)));
         b.setBezelStyle(NSBezelStyle::Toolbar);
@@ -153,7 +168,9 @@ pub(super) fn open(v: &TermView) {
 }
 
 pub(super) fn close(v: &TermView) {
-    let Some(st) = v.ivars().find.borrow_mut().take() else { return };
+    let Some(st) = v.ivars().find.borrow_mut().take() else {
+        return;
+    };
     st.bar.removeFromSuperview();
     if let Some(w) = v.window() {
         w.makeFirstResponder(Some(v));
@@ -172,17 +189,27 @@ pub(super) fn open_with(v: &TermView, query: &str) {
 }
 
 fn query(v: &TermView) -> Option<String> {
-    v.ivars().find.borrow().as_ref().map(|s| s.field.stringValue().to_string())
+    v.ivars()
+        .find
+        .borrow()
+        .as_ref()
+        .map(|s| s.field.stringValue().to_string())
 }
 
 /// The query changed: search again and pick the match nearest the bottom of the view.
 fn requery(v: &TermView) {
     let Some(q) = query(v) else { return };
-    let Some((found, bottom)) = v.with_term(|t| (find::find(t, &q), t.first_id() + (v.top_index(t) + t.rows) as u64))
+    let Some((found, bottom)) =
+        v.with_term(|t| (find::find(t, &q), t.first_id() + (v.top_index(t) + t.rows) as u64))
     else {
         return;
     };
-    let cur = found.segs.iter().rev().find(|s| s.id < bottom).map_or(0, |s| s.m as usize);
+    let cur = found
+        .segs
+        .iter()
+        .rev()
+        .find(|s| s.id < bottom)
+        .map_or(0, |s| s.m as usize);
     if let Some(st) = v.ivars().find.borrow_mut().as_mut() {
         st.found = found;
         st.cur = cur;
@@ -193,7 +220,9 @@ fn requery(v: &TermView) {
 /// Move to the next (1) or previous (-1) match, searching again first.
 pub(super) fn step(v: &TermView, dir: isize) {
     let Some(q) = query(v) else { return };
-    let Some(found) = v.with_term(|t| find::find(t, &q)) else { return };
+    let Some(found) = v.with_term(|t| find::find(t, &q)) else {
+        return;
+    };
     if let Some(st) = v.ivars().find.borrow_mut().as_mut() {
         let n = found.count as isize;
         if n > 0 {
@@ -226,9 +255,14 @@ fn show_current(v: &TermView) {
 
 /// Scroll so line `id` is on screen (a third of the way down if it wasn't).
 fn reveal(v: &TermView, id: u64) {
-    let Some((idx, top, rows, alt)) =
-        v.with_term(|t| (id.saturating_sub(t.first_id()) as isize, v.top_index(t) as isize, t.rows as isize, t.alt_active))
-    else {
+    let Some((idx, top, rows, alt)) = v.with_term(|t| {
+        (
+            id.saturating_sub(t.first_id()) as isize,
+            v.top_index(t) as isize,
+            t.rows as isize,
+            t.alt_active,
+        )
+    }) else {
         return;
     };
     if alt || (top..top + rows).contains(&idx) {

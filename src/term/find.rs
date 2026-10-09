@@ -5,7 +5,7 @@
 //! Only one logical line's text is held at a time — no copy of the scrollback.
 
 use super::grid::flag;
-use super::term::Term;
+use super::vt::Term;
 
 /// Stop collecting after this many matches (bounds memory on huge buffers).
 pub const MAX_MATCHES: usize = 10_000;
@@ -105,12 +105,21 @@ pub fn find(t: &Term, query: &str) -> Found {
             out.count += 1;
             let mut seg: Option<Seg> = None;
             for &(l, col, w) in &at[s..s + q.len()] {
-                let (id, a, b) = (first + (base as u64 + l as u64), col as usize, (col + w as u32) as usize);
+                let (id, a, b) = (
+                    first + (base as u64 + l as u64),
+                    col as usize,
+                    (col + w as u32) as usize,
+                );
                 match &mut seg {
                     Some(g) if g.id == id => g.end = g.end.max(b),
                     _ => {
                         out.segs.extend(seg.take());
-                        seg = Some(Seg { id, start: a, end: b, m });
+                        seg = Some(Seg {
+                            id,
+                            start: a,
+                            end: b,
+                            m,
+                        });
                     }
                 }
             }

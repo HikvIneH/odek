@@ -12,14 +12,21 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use super::term::Term;
+use super::vt::Term;
 
 /// Wait this long for the end of a synchronized update before drawing anyway.
 const SYNC_TIMEOUT: Duration = Duration::from_millis(150);
 
 /// Environment variables from whatever launched us that would confuse
 /// programs into thinking they run in another terminal.
-const DROP_ENV: &[&str] = &["TERM", "COLORTERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION", "TERM_SESSION_ID", "CLAUDECODE"];
+const DROP_ENV: &[&str] = &[
+    "TERM",
+    "COLORTERM",
+    "TERM_PROGRAM",
+    "TERM_PROGRAM_VERSION",
+    "TERM_SESSION_ID",
+    "CLAUDECODE",
+];
 const DROP_ENV_PREFIX: &[&str] = &["ITERM_", "WARP_", "LC_TERMINAL", "CLAUDE_CODE_"];
 
 pub struct Spawn<'a> {
@@ -52,13 +59,16 @@ impl Session {
 
         let (tx, rx) = mpsc::channel::<Vec<u8>>();
         let mut writer = File::from(master.try_clone()?);
-        std::thread::Builder::new().name("pty-writer".into()).stack_size(64 << 10).spawn(move || {
-            for chunk in rx {
-                if writer.write_all(&chunk).is_err() {
-                    break;
+        std::thread::Builder::new()
+            .name("pty-writer".into())
+            .stack_size(64 << 10)
+            .spawn(move || {
+                for chunk in rx {
+                    if writer.write_all(&chunk).is_err() {
+                        break;
+                    }
                 }
-            }
-        })?;
+            })?;
 
         let reader = File::from(master.try_clone()?);
         let ctx = Reader {
@@ -70,9 +80,19 @@ impl Session {
             exited: exited.clone(),
             pid,
         };
-        std::thread::Builder::new().name("pty-reader".into()).stack_size(256 << 10).spawn(move || ctx.run())?;
+        std::thread::Builder::new()
+            .name("pty-reader".into())
+            .stack_size(256 << 10)
+            .spawn(move || ctx.run())?;
 
-        Ok(Session { term, master, pid, tx, wake_pending, exited })
+        Ok(Session {
+            term,
+            master,
+            pid,
+            tx,
+            wake_pending,
+            exited,
+        })
     }
 
     pub fn write(&self, bytes: impl Into<Vec<u8>>) {
@@ -83,10 +103,6 @@ impl Session {
         self.term.lock().unwrap().resize(cols as usize, rows as usize);
         let ws = winsize(cols, rows, cell_px);
         unsafe { libc::ioctl(self.master.as_raw_fd(), libc::TIOCSWINSZ, &ws) };
-    }
-
-    pub fn is_exited(&self) -> bool {
-        self.exited.lock().unwrap().is_some()
     }
 
     /// The program in the foreground (e.g. "claude", "vim"), or the shell.
@@ -145,7 +161,11 @@ impl Reader {
             // Inside a synchronized update, don't wait forever for its end.
             if let Some(since) = sync_since {
                 let left = SYNC_TIMEOUT.saturating_sub(since.elapsed());
-                let mut pfd = libc::pollfd { fd: self.file.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+                let mut pfd = libc::pollfd {
+                    fd: self.file.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
                 let ready = unsafe { libc::poll(&mut pfd, 1, left.as_millis() as libc::c_int) };
                 if ready == 0 {
                     sync_since = None;
@@ -178,7 +198,11 @@ impl Reader {
         }
         let mut status = 0;
         unsafe { libc::waitpid(self.pid, &mut status, 0) };
-        let code = if libc::WIFEXITED(status) { libc::WEXITSTATUS(status) } else { 128 + libc::WTERMSIG(status) };
+        let code = if libc::WIFEXITED(status) {
+            libc::WEXITSTATUS(status)
+        } else {
+            128 + libc::WTERMSIG(status)
+        };
         *self.exited.lock().unwrap() = Some(code);
         self.wake_pending.store(false, Ordering::SeqCst);
         self.wake();
@@ -228,7 +252,12 @@ fn child_env() -> Vec<CString> {
         })
         .collect();
     let version = format!("TERM_PROGRAM_VERSION={}", env!("CARGO_PKG_VERSION"));
-    for kv in ["TERM=xterm-256color", "COLORTERM=truecolor", "TERM_PROGRAM=Odek", &version] {
+    for kv in [
+        "TERM=xterm-256color",
+        "COLORTERM=truecolor",
+        "TERM_PROGRAM=Odek",
+        &version,
+    ] {
         env.push(CString::new(kv).unwrap());
     }
     // Apps opened from Finder get no locale, and zsh then mangles UTF-8.
@@ -242,7 +271,12 @@ fn fork_shell(opts: &Spawn) -> io::Result<(OwnedFd, libc::pid_t)> {
     // Everything the child needs is built before fork: after it, only
     // async-signal-safe calls are allowed.
     let shell = login_shell();
-    let name = shell.to_bytes().rsplit(|&b| b == b'/').next().unwrap_or(b"zsh").to_vec();
+    let name = shell
+        .to_bytes()
+        .rsplit(|&b| b == b'/')
+        .next()
+        .unwrap_or(b"zsh")
+        .to_vec();
     let argv: Vec<CString> = match opts.command {
         Some(cmd) => vec![shell.clone(), c"-l".into(), c"-c".into(), CString::new(cmd)?],
         None => vec![CString::new([b"-".as_slice(), &name].concat())?],
@@ -299,7 +333,7 @@ mod tests {
         };
         let s = Session::spawn(&opts, wake).unwrap();
         let deadline = Instant::now() + Duration::from_secs(10);
-        while !s.is_exited() && Instant::now() < deadline {
+        while s.exited.lock().unwrap().is_none() && Instant::now() < deadline {
             let _ = rx.recv_timeout(Duration::from_millis(100));
             s.wake_pending.store(false, Ordering::SeqCst);
         }

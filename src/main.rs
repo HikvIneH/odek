@@ -23,17 +23,15 @@ fn main() {
     // windows (in progress).
     let exe = std::env::args().next().unwrap_or_default();
     let as_term = exe.rsplit('/').next() == Some("odek-term");
-    let mut args = std::env::args().skip(1).filter(|a| !a.starts_with("-psn")).peekable();
+    let mut args = std::env::args()
+        .skip(1)
+        .filter(|a| !a.starts_with("-psn"))
+        .peekable();
     if as_term || args.peek().map(String::as_str) == Some("--term") {
         if !as_term {
             args.next();
         }
-        let dir = args
-            .next()
-            .map(std::path::PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(Into::into))
-            .unwrap_or_else(|| "/".into());
-        return term::app::run(dir);
+        return term::app::run(args.next().map(std::path::PathBuf::from));
     }
     let mtm = MainThreadMarker::new().expect("must run on the main thread");
     let app = NSApplication::sharedApplication(mtm);

@@ -49,7 +49,9 @@ impl Node {
                 true
             }
             Node::Pane(_) => false,
-            Node::Split { first, second, .. } => first.split(target, new, across) || second.split(target, new, across),
+            Node::Split { first, second, .. } => {
+                first.split(target, new, across) || second.split(target, new, across)
+            }
         }
     }
 
@@ -58,8 +60,18 @@ impl Node {
         match self {
             Node::Pane(id) if id == target => None,
             Node::Pane(_) => Some(self),
-            Node::Split { across, ratio, first, second } => match (first.without(target), second.without(target)) {
-                (Some(a), Some(b)) => Some(Node::Split { across, ratio, first: Box::new(a), second: Box::new(b) }),
+            Node::Split {
+                across,
+                ratio,
+                first,
+                second,
+            } => match (first.without(target), second.without(target)) {
+                (Some(a), Some(b)) => Some(Node::Split {
+                    across,
+                    ratio,
+                    first: Box::new(a),
+                    second: Box::new(b),
+                }),
                 (Some(a), None) => Some(a),
                 (None, Some(b)) => Some(b),
                 (None, None) => None,
@@ -109,16 +121,28 @@ impl Workspace {
 
     pub fn add_group(&mut self, name: &str) -> Id {
         let id = self.new_id();
-        self.groups.push(Group { id, name: name.to_string(), collapsed: false, tabs: Vec::new() });
+        self.groups.push(Group {
+            id,
+            name: name.to_string(),
+            collapsed: false,
+            tabs: Vec::new(),
+        });
         id
     }
 
     /// Add a one-pane tab to `group`, after `after` if given, and activate it.
     pub fn add_tab(&mut self, group: Id, after: Option<Id>, pane: Id) -> Id {
         let id = self.new_id();
-        let tab = Tab { id, name: None, root: Node::Pane(pane), focus: pane };
+        let tab = Tab {
+            id,
+            name: None,
+            root: Node::Pane(pane),
+            focus: pane,
+        };
         if let Some(g) = self.groups.iter_mut().find(|g| g.id == group) {
-            let at = after.and_then(|a| g.tabs.iter().position(|t| t.id == a)).map_or(g.tabs.len(), |i| i + 1);
+            let at = after
+                .and_then(|a| g.tabs.iter().position(|t| t.id == a))
+                .map_or(g.tabs.len(), |i| i + 1);
             g.tabs.insert(at, tab);
             g.collapsed = false;
         }
@@ -131,11 +155,17 @@ impl Workspace {
     }
 
     pub fn tab_mut(&mut self, id: Id) -> Option<&mut Tab> {
-        self.groups.iter_mut().flat_map(|g| &mut g.tabs).find(|t| t.id == id)
+        self.groups
+            .iter_mut()
+            .flat_map(|g| &mut g.tabs)
+            .find(|t| t.id == id)
     }
 
     pub fn group_of(&self, tab: Id) -> Option<Id> {
-        self.groups.iter().find(|g| g.tabs.iter().any(|t| t.id == tab)).map(|g| g.id)
+        self.groups
+            .iter()
+            .find(|g| g.tabs.iter().any(|t| t.id == tab))
+            .map(|g| g.id)
     }
 
     pub fn active_tab(&self) -> Option<&Tab> {
@@ -143,12 +173,19 @@ impl Workspace {
     }
 
     pub fn tab_of_pane(&self, pane: Id) -> Option<Id> {
-        self.groups.iter().flat_map(|g| &g.tabs).find(|t| t.root.panes().contains(&pane)).map(|t| t.id)
+        self.groups
+            .iter()
+            .flat_map(|g| &g.tabs)
+            .find(|t| t.root.panes().contains(&pane))
+            .map(|t| t.id)
     }
 
     /// All tabs in sidebar order.
     pub fn tabs(&self) -> Vec<Id> {
-        self.groups.iter().flat_map(|g| g.tabs.iter().map(|t| t.id)).collect()
+        self.groups
+            .iter()
+            .flat_map(|g| g.tabs.iter().map(|t| t.id))
+            .collect()
     }
 
     /// Next (or previous) tab after the active one, wrapping.
@@ -171,7 +208,9 @@ impl Workspace {
     /// Remove a pane; its tab goes too when it was the last one. The next
     /// active tab is the neighbour in the sidebar.
     pub fn close_pane(&mut self, pane: Id) -> Closed {
-        let Some(tab_id) = self.tab_of_pane(pane) else { return Closed::Nothing };
+        let Some(tab_id) = self.tab_of_pane(pane) else {
+            return Closed::Nothing;
+        };
         let tab = self.tab_mut(tab_id).unwrap();
         let old = tab.root.panes();
         match tab.root.clone().without(pane) {
@@ -183,7 +222,10 @@ impl Workspace {
                 if tab.focus == pane {
                     tab.focus = left[i.min(left.len() - 1)];
                 }
-                Closed::Pane { tab: tab_id, focus: tab.focus }
+                Closed::Pane {
+                    tab: tab_id,
+                    focus: tab.focus,
+                }
             }
             None => {
                 self.remove_tab(tab_id);
@@ -207,7 +249,9 @@ impl Workspace {
     /// Move a tab into `group` at `index` (clamped).
     pub fn move_tab(&mut self, tab: Id, group: Id, index: usize) {
         let Some(t) = self.tab(tab).cloned() else { return };
-        let Some(gi) = self.groups.iter().position(|g| g.id == group) else { return };
+        let Some(gi) = self.groups.iter().position(|g| g.id == group) else {
+            return;
+        };
         let from_same = self.groups[gi].tabs.iter().position(|x| x.id == tab);
         for g in &mut self.groups {
             g.tabs.retain(|x| x.id != tab);
@@ -224,7 +268,9 @@ impl Workspace {
 
     /// Delete a group; its tabs move to the neighbouring group (none if it's the last).
     pub fn remove_group(&mut self, group: Id) -> Vec<Id> {
-        let Some(gi) = self.groups.iter().position(|g| g.id == group) else { return Vec::new() };
+        let Some(gi) = self.groups.iter().position(|g| g.id == group) else {
+            return Vec::new();
+        };
         let g = self.groups.remove(gi);
         if self.groups.is_empty() {
             let closed: Vec<Id> = g.tabs.iter().map(|t| t.id).collect();
@@ -249,7 +295,10 @@ impl Workspace {
             out.push_str(&format!("group {} {}\n", g.collapsed as u8, one_line(&g.name)));
             for t in &g.tabs {
                 let active = (self.active == Some(t.id)) as u8;
-                out.push_str(&format!("  tab {active} {}\n", t.name.as_deref().map_or(String::new(), one_line)));
+                out.push_str(&format!(
+                    "  tab {active} {}\n",
+                    t.name.as_deref().map_or(String::new(), one_line)
+                ));
                 save_node(&t.root, t.focus, 2, &cwd, &mut out);
             }
         }
@@ -277,7 +326,12 @@ impl Workspace {
                 let root = load_node(&mut lines, &mut ws, &mut panes, &mut focus)?;
                 let id = ws.new_id();
                 let first = root.panes()[0];
-                let tab = Tab { id, name: (!name.is_empty()).then(|| name.to_string()), focus: focus.unwrap_or(first), root };
+                let tab = Tab {
+                    id,
+                    name: (!name.is_empty()).then(|| name.to_string()),
+                    focus: focus.unwrap_or(first),
+                    root,
+                };
                 ws.groups.last_mut()?.tabs.push(tab);
                 if active == "1" {
                     ws.active = Some(id);
@@ -300,10 +354,22 @@ fn save_node(node: &Node, focus: Id, depth: usize, cwd: &impl Fn(Id) -> Option<P
     match node {
         Node::Pane(id) => {
             let dir = cwd(*id).map(|p| p.display().to_string()).unwrap_or_default();
-            out.push_str(&format!("{pad}pane {} {}\n", (*id == focus) as u8, one_line(&dir)));
+            out.push_str(&format!(
+                "{pad}pane {} {}\n",
+                (*id == focus) as u8,
+                one_line(&dir)
+            ));
         }
-        Node::Split { across, ratio, first, second } => {
-            out.push_str(&format!("{pad}split {} {ratio:.3}\n", if *across { "across" } else { "down" }));
+        Node::Split {
+            across,
+            ratio,
+            first,
+            second,
+        } => {
+            out.push_str(&format!(
+                "{pad}split {} {ratio:.3}\n",
+                if *across { "across" } else { "down" }
+            ));
             save_node(first, focus, depth + 1, cwd, out);
             save_node(second, focus, depth + 1, cwd, out);
         }
@@ -380,10 +446,16 @@ mod tests {
         assert_eq!(ws.cycle(false), Some(t1));
         let work = ws.groups[0].id;
         ws.move_tab(t2, work, 0);
-        assert_eq!(ws.groups[0].tabs.iter().map(|t| t.id).collect::<Vec<_>>(), [t2, t1]);
+        assert_eq!(
+            ws.groups[0].tabs.iter().map(|t| t.id).collect::<Vec<_>>(),
+            [t2, t1]
+        );
         assert!(ws.groups[1].tabs.is_empty());
         ws.move_tab(t2, work, 2);
-        assert_eq!(ws.groups[0].tabs.iter().map(|t| t.id).collect::<Vec<_>>(), [t1, t2]);
+        assert_eq!(
+            ws.groups[0].tabs.iter().map(|t| t.id).collect::<Vec<_>>(),
+            [t1, t2]
+        );
     }
 
     #[test]
@@ -402,7 +474,12 @@ mod tests {
         ws.split(tab, p3, true);
         ws.tab_mut(tab).unwrap().name = Some("POS machine".into());
         ws.groups[0].collapsed = true;
-        let text = ws.save(|id| Some(PathBuf::from(format!("/dir/{}", if id == p2 { "a b" } else { "c" }))));
+        let text = ws.save(|id| {
+            Some(PathBuf::from(format!(
+                "/dir/{}",
+                if id == p2 { "a b" } else { "c" }
+            )))
+        });
         let (back, panes) = Workspace::load(&text).unwrap();
         assert_eq!(back.groups.len(), 2);
         assert_eq!(back.groups[0].name, "Work");

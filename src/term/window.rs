@@ -12,12 +12,13 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::{MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSAlert, NSAlertFirstButtonReturn, NSApplication, NSAutoresizingMaskOptions, NSBackingStoreType, NSBox, NSBoxType,
-    NSButton, NSColor, NSFont, NSImage, NSMenu, NSMenuItem, NSModalResponse, NSRequestUserAttentionType, NSSplitView,
-    NSSplitViewDividerStyle, NSTextAlignment, NSTextField, NSView, NSWindow, NSWindowDelegate, NSWindowStyleMask,
+    NSAlert, NSAlertFirstButtonReturn, NSApplication, NSAutoresizingMaskOptions, NSBackingStoreType,
+    NSButton, NSImage, NSMenu, NSMenuItem, NSModalResponse, NSRequestUserAttentionType, NSSplitView,
+    NSSplitViewDividerStyle, NSTextField, NSView, NSWindow, NSWindowDelegate, NSWindowStyleMask,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
+use super::header::PaneHeader;
 use super::sidebar::{Row, RowKey, Sidebar, SidebarEvent};
 use super::target::Target;
 use super::view::{TermView, ViewEvent};
@@ -25,13 +26,14 @@ use super::workspace::{Closed, Id, Node, Workspace};
 
 const SIDEBAR_W: f64 = 240.0;
 const HEADER_H: f64 = 24.0;
-const SHELLS: &[&str] = &["zsh", "bash", "fish", "sh", "dash", "tcsh", "csh", "ksh", "nu", "login"];
+const SHELLS: &[&str] = &[
+    "zsh", "bash", "fish", "sh", "dash", "tcsh", "csh", "ksh", "nu", "login",
+];
 
 struct Pane {
     /// Header (when the tab is split) above the terminal.
     container: Retained<NSView>,
-    header: Retained<NSBox>,
-    label: Retained<NSTextField>,
+    header: Retained<PaneHeader>,
     term: Retained<TermView>,
     title: String,
     cwd: Option<PathBuf>,
@@ -83,13 +85,20 @@ impl Workbench {
         let split = NSSplitView::initWithFrame(NSSplitView::alloc(mtm), bounds);
         split.setVertical(true);
         split.setDividerStyle(NSSplitViewDividerStyle::Thin);
-        split.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable);
+        split.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
+        );
         let sidebar = Sidebar::new(SIDEBAR_W, bounds.size.height, mtm);
         let content = NSView::initWithFrame(
             NSView::alloc(mtm),
-            NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(bounds.size.width - SIDEBAR_W, bounds.size.height)),
+            NSRect::new(
+                NSPoint::new(0.0, 0.0),
+                NSSize::new(bounds.size.width - SIDEBAR_W, bounds.size.height),
+            ),
         );
-        content.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable);
+        content.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
+        );
         split.addSubview(&sidebar.view);
         split.addSubview(&content);
         window.setContentView(Some(&split));
@@ -126,12 +135,16 @@ impl Workbench {
     // ---- startup and saving ----
 
     fn save_path() -> Option<PathBuf> {
+        // Tests point this elsewhere so they never touch the real workspace.
+        if let Some(p) = std::env::var_os("ODEK_WORKSPACE_FILE") {
+            return Some(PathBuf::from(p));
+        }
         let home = std::env::var_os("HOME")?;
         Some(PathBuf::from(home).join("Library/Application Support/Odek/workspace.txt"))
     }
 
     /// Restore the saved workspace (or start one), plus a tab for `open` if given.
-    pub fn start(&self, open: Option<PathBuf>) {
+    pub fn start(&self, open: Option<PathBuf>, show: bool) {
         let saved = Self::save_path().and_then(|p| std::fs::read_to_string(p).ok());
         let restored = saved.as_deref().and_then(Workspace::load);
         match restored {
@@ -146,7 +159,9 @@ impl Workbench {
                 ws.add_group("Main");
                 *self.ws.borrow_mut() = ws;
                 if open.is_none() {
-                    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| "/".into());
+                    let home = std::env::var_os("HOME")
+                        .map(PathBuf::from)
+                        .unwrap_or_else(|| "/".into());
                     self.new_tab_in(&home);
                 }
             }
@@ -155,15 +170,50 @@ impl Workbench {
             self.new_tab_in(&dir);
         }
         self.show_active();
-        self.window.makeKeyAndOrderFront(None);
+        if show {
+            self.window.makeKeyAndOrderFront(None);
+        }
         self.focus_active_pane();
+    }
+
+    #[cfg_attr(not(feature = "selftest"), allow(dead_code))]
+    pub fn focused_term(&self) -> Option<Retained<TermView>> {
+        let id = self.focused_pane()?;
+        self.panes.borrow().get(&id).map(|p| p.term.clone())
+    }
+
+    #[cfg(feature = "selftest")]
+    pub fn name_active_tab(&self, name: &str) {
+        if let Some(a) = self.ws.borrow().active
+            && let Some(t) = self.ws.borrow_mut().tab_mut(a)
+        {
+            t.name = Some(name.to_string());
+        }
+        self.refresh();
+    }
+
+    #[cfg(feature = "selftest")]
+    pub fn move_active_to_new_group(&self, name: &str) {
+        let Some(tab) = self.ws.borrow().active else {
+            return;
+        };
+        let group = self.ws.borrow_mut().add_group(name);
+        self.ws.borrow_mut().move_tab(tab, group, 0);
+        self.refresh();
     }
 
     pub fn save(&self) {
         self.sync_ratios();
+        for p in self.panes.borrow_mut().values_mut() {
+            if let Some(cwd) = p.term.session_cwd() {
+                p.cwd = Some(cwd);
+            }
+        }
         let text = {
             let panes = self.panes.borrow();
-            self.ws.borrow().save(|id| panes.get(&id).and_then(|p| p.cwd.clone()))
+            self.ws
+                .borrow()
+                .save(|id| panes.get(&id).and_then(|p| p.cwd.clone()))
         };
         if *self.last_saved.borrow() == text {
             return;
@@ -187,27 +237,20 @@ impl Workbench {
         let size = self.content.bounds().size;
         let frame = NSRect::new(NSPoint::new(0.0, 0.0), size);
         let container = NSView::initWithFrame(NSView::alloc(mtm), frame);
-        container.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable);
-
-        let header = NSBox::initWithFrame(
-            NSBox::alloc(mtm),
-            NSRect::new(NSPoint::new(0.0, size.height - HEADER_H), NSSize::new(size.width, HEADER_H)),
+        container.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
         );
-        header.setBoxType(NSBoxType::Custom);
-        header.setBorderWidth(0.0);
-        header.setFillColor(&NSColor::windowBackgroundColor());
-        header.setContentViewMargins(NSSize::new(0.0, 0.0));
-        header.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewMinYMargin);
-        let label = NSTextField::labelWithString(&NSString::from_str(""), mtm);
-        label.setFrame(NSRect::new(NSPoint::new(30.0, 4.0), NSSize::new(size.width - 60.0, 16.0)));
-        label.setAlignment(NSTextAlignment::Center);
-        label.setFont(Some(&NSFont::systemFontOfSize(11.5)));
-        label.setTextColor(Some(&NSColor::secondaryLabelColor()));
-        label.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
-        if let Some(c) = label.cell() {
-            c.setLineBreakMode(objc2_app_kit::NSLineBreakMode::ByTruncatingTail);
-        }
-        header.addSubview(&label);
+
+        let header = PaneHeader::new(
+            NSRect::new(
+                NSPoint::new(0.0, size.height - HEADER_H),
+                NSSize::new(size.width, HEADER_H),
+            ),
+            mtm,
+        );
+        header.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewMinYMargin,
+        );
         let close = NSButton::initWithFrame(
             NSButton::alloc(mtm),
             NSRect::new(NSPoint::new(size.width - 26.0, 2.0), NSSize::new(20.0, 20.0)),
@@ -235,7 +278,9 @@ impl Workbench {
         container.addSubview(&header);
 
         let term = TermView::new(frame, mtm);
-        term.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable);
+        term.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
+        );
         container.addSubview(&term);
         let me = self.me.clone();
         term.set_on_event(move |e| {
@@ -243,13 +288,25 @@ impl Workbench {
                 b.pane_event(id, e);
             }
         });
-        let dir = if dir.is_dir() { dir.to_path_buf() } else { std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default() };
+        let dir = if dir.is_dir() {
+            dir.to_path_buf()
+        } else {
+            std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default()
+        };
         if let Err(e) = term.start(&dir, None) {
             eprintln!("odek: could not start shell: {e}");
         }
         self.panes.borrow_mut().insert(
             id,
-            Pane { container, header, label, term, title: String::new(), cwd: Some(dir), program: None, attention: false },
+            Pane {
+                container,
+                header,
+                term,
+                title: String::new(),
+                cwd: Some(dir),
+                program: None,
+                attention: false,
+            },
         );
     }
 
@@ -303,8 +360,10 @@ impl Workbench {
 
     fn focus_active_pane(&self) {
         let Some(id) = self.focused_pane() else { return };
-        if let Some(p) = self.panes.borrow().get(&id) {
-            self.window.makeFirstResponder(Some(&p.term));
+        // Clone first: becoming first responder reports back into `pane_event`.
+        let term = self.panes.borrow().get(&id).map(|p| p.term.clone());
+        if let Some(term) = term {
+            self.window.makeFirstResponder(Some(&term));
         }
         if let Some(p) = self.panes.borrow_mut().get_mut(&id) {
             p.attention = false;
@@ -315,7 +374,12 @@ impl Workbench {
     /// The folder new tabs and splits start in: the focused pane's.
     fn current_dir(&self) -> PathBuf {
         self.focused_pane()
-            .and_then(|id| self.panes.borrow().get(&id).and_then(|p| p.term.session_cwd().or(p.cwd.clone())))
+            .and_then(|id| {
+                self.panes
+                    .borrow()
+                    .get(&id)
+                    .and_then(|p| p.term.session_cwd().or(p.cwd.clone()))
+            })
             .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
             .unwrap_or_else(|| "/".into())
     }
@@ -336,9 +400,11 @@ impl Workbench {
         let bounds = self.content.bounds();
         let view = self.build(&tab.root, bounds, split);
         view.setFrame(bounds);
-        view.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable);
+        view.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
+        );
         self.content.addSubview(&view);
-        self.place_dividers(&tab.root, &view);
+        place_dividers(&tab.root, &view);
         self.refresh();
     }
 
@@ -350,10 +416,18 @@ impl Workbench {
                 p.container.setFrame(frame);
                 p.header.setHidden(!headers);
                 let h = frame.size.height - if headers { HEADER_H } else { 0.0 };
-                p.term.setFrame(NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(frame.size.width, h.max(10.0))));
+                p.term.setFrame(NSRect::new(
+                    NSPoint::new(0.0, 0.0),
+                    NSSize::new(frame.size.width, h.max(10.0)),
+                ));
                 p.container.clone()
             }
-            Node::Split { across, first, second, .. } => {
+            Node::Split {
+                across,
+                first,
+                second,
+                ..
+            } => {
                 let split = NSSplitView::initWithFrame(NSSplitView::alloc(self.mtm), frame);
                 split.setVertical(*across);
                 split.setDividerStyle(NSSplitViewDividerStyle::Thin);
@@ -367,24 +441,11 @@ impl Workbench {
         }
     }
 
-    fn place_dividers(&self, node: &Node, view: &NSView) {
-        if let Node::Split { across, ratio, first, second } = node
-            && let Some(split) = view.downcast_ref::<NSSplitView>()
-        {
-            let size = split.bounds().size;
-            let total = if *across { size.width } else { size.height } - split.dividerThickness();
-            split.setPosition_ofDividerAtIndex((total * ratio).round(), 0);
-            let subs = split.subviews();
-            if subs.len() == 2 {
-                self.place_dividers(first, &subs.objectAtIndex(0));
-                self.place_dividers(second, &subs.objectAtIndex(1));
-            }
-        }
-    }
-
     /// Read divider positions back into the model before saving or rebuilding.
     fn sync_ratios(&self) {
-        let Some(top) = self.content.subviews().firstObject() else { return };
+        let Some(top) = self.content.subviews().firstObject() else {
+            return;
+        };
         let mut ws = self.ws.borrow_mut();
         let Some(active) = ws.active else { return };
         if let Some(tab) = ws.tab_mut(active) {
@@ -398,17 +459,7 @@ impl Workbench {
         let panes = self.panes.borrow();
         let p = panes.get(&tab.focus);
         let dir = p.and_then(|p| p.cwd.as_deref()).map(tilde).unwrap_or_default();
-        let auto = p
-            .map(|p| {
-                if !p.title.is_empty() {
-                    p.title.clone()
-                } else if let Some(prog) = &p.program {
-                    prog.clone()
-                } else {
-                    dir.clone()
-                }
-            })
-            .unwrap_or_default();
+        let auto = p.map(pane_title).unwrap_or_default();
         (tab.name.clone().unwrap_or(auto), dir)
     }
 
@@ -417,16 +468,22 @@ impl Workbench {
         let ws = self.ws.borrow();
         let mut rows = Vec::new();
         for g in &ws.groups {
-            rows.push(Row::Group { id: g.id, name: g.name.clone(), collapsed: g.collapsed, count: g.tabs.len() });
+            rows.push(Row::Group {
+                id: g.id,
+                name: g.name.clone(),
+                collapsed: g.collapsed,
+                count: g.tabs.len(),
+            });
             for t in &g.tabs {
                 let (title, subtitle) = self.tab_title(t);
                 let panes = self.panes.borrow();
                 let ids = t.root.panes();
                 let attention = ids.iter().any(|i| panes.get(i).is_some_and(|p| p.attention));
-                let running = ids.iter().any(|i| panes.get(i).is_some_and(|p| p.program.is_some()));
+                let running = ids
+                    .iter()
+                    .any(|i| panes.get(i).is_some_and(|p| p.program.is_some()));
                 rows.push(Row::Tab {
                     id: t.id,
-                    group: g.id,
                     title,
                     subtitle,
                     active: ws.active == Some(t.id),
@@ -442,11 +499,7 @@ impl Workbench {
             let panes = self.panes.borrow();
             for id in tab.root.panes() {
                 if let Some(p) = panes.get(&id) {
-                    let dir = p.cwd.as_deref().map(tilde).unwrap_or_default();
-                    let text = if p.title.is_empty() { p.program.clone().unwrap_or(dir) } else { p.title.clone() };
-                    p.label.setStringValue(&NSString::from_str(&text));
-                    let color = if id == tab.focus { NSColor::labelColor() } else { NSColor::tertiaryLabelColor() };
-                    p.label.setTextColor(Some(&color));
+                    p.header.set(&pane_title(p), id == tab.focus);
                 }
             }
         } else {
@@ -478,7 +531,13 @@ impl Workbench {
     fn context_menu(&self, key: RowKey) -> Option<Retained<NSMenu>> {
         let menu = NSMenu::new(self.mtm);
         self.menu_targets.borrow_mut().clear();
-        let groups: Vec<(Id, String)> = self.ws.borrow().groups.iter().map(|g| (g.id, g.name.clone())).collect();
+        let groups: Vec<(Id, String)> = self
+            .ws
+            .borrow()
+            .groups
+            .iter()
+            .map(|g| (g.id, g.name.clone()))
+            .collect();
         match key {
             RowKey::Tab(tab) => {
                 self.add_item(&menu, "Rename Tab…", move |b| b.rename_tab(tab));
@@ -573,7 +632,9 @@ impl Workbench {
         let (group, after) = {
             let ws = self.ws.borrow();
             let after = ws.active;
-            let group = after.and_then(|t| ws.group_of(t)).or(ws.groups.first().map(|g| g.id));
+            let group = after
+                .and_then(|t| ws.group_of(t))
+                .or(ws.groups.first().map(|g| g.id));
             (group, after)
         };
         let group = group.unwrap_or_else(|| self.ws.borrow_mut().add_group("Main"));
@@ -591,7 +652,9 @@ impl Workbench {
     }
 
     pub fn split(&self, across: bool) {
-        let Some(tab) = self.ws.borrow().active else { return };
+        let Some(tab) = self.ws.borrow().active else {
+            return;
+        };
         self.sync_ratios();
         let dir = self.current_dir();
         let pane = self.ws.borrow_mut().new_id();
@@ -687,7 +750,12 @@ impl Workbench {
     }
 
     fn request_close_tab(&self, tab: Id) {
-        let ids = self.ws.borrow().tab(tab).map(|t| t.root.panes()).unwrap_or_default();
+        let ids = self
+            .ws
+            .borrow()
+            .tab(tab)
+            .map(|t| t.root.panes())
+            .unwrap_or_default();
         let running = self.running_in(&ids);
         let me = self.me.clone();
         let close = move || {
@@ -773,20 +841,36 @@ impl Workbench {
     }
 
     fn rename_tab(&self, tab: Id) {
-        let current = self.ws.borrow().tab(tab).and_then(|t| t.name.clone()).unwrap_or_default();
+        let current = self
+            .ws
+            .borrow()
+            .tab(tab)
+            .and_then(|t| t.name.clone())
+            .unwrap_or_default();
         let me = self.me.clone();
-        self.ask_name("Rename tab (empty: follow the program's title)", &current, move |name| {
-            let Some(b) = me.upgrade() else { return };
-            if let Some(t) = b.ws.borrow_mut().tab_mut(tab) {
-                t.name = (!name.is_empty()).then_some(name);
-            }
-            b.refresh();
-            b.save();
-        });
+        self.ask_name(
+            "Rename tab (empty: follow the program's title)",
+            &current,
+            move |name| {
+                let Some(b) = me.upgrade() else { return };
+                if let Some(t) = b.ws.borrow_mut().tab_mut(tab) {
+                    t.name = (!name.is_empty()).then_some(name);
+                }
+                b.refresh();
+                b.save();
+            },
+        );
     }
 
     fn rename_group(&self, group: Id) {
-        let current = self.ws.borrow().groups.iter().find(|g| g.id == group).map(|g| g.name.clone()).unwrap_or_default();
+        let current = self
+            .ws
+            .borrow()
+            .groups
+            .iter()
+            .find(|g| g.id == group)
+            .map(|g| g.name.clone())
+            .unwrap_or_default();
         let me = self.me.clone();
         self.ask_name("Rename group", &current, move |name| {
             let Some(b) = me.upgrade() else { return };
@@ -874,8 +958,44 @@ impl Workbench {
     }
 }
 
+/// What a pane is called: while a program runs, its own title (Claude Code
+/// puts its status and task there); at a shell prompt, the folder.
+fn pane_title(p: &Pane) -> String {
+    let dir = p.cwd.as_deref().map(tilde).unwrap_or_default();
+    match &p.program {
+        Some(prog) if p.title.is_empty() => prog.clone(),
+        Some(_) => p.title.clone(),
+        None => dir,
+    }
+}
+
+fn place_dividers(node: &Node, view: &NSView) {
+    if let Node::Split {
+        across,
+        ratio,
+        first,
+        second,
+    } = node
+        && let Some(split) = view.downcast_ref::<NSSplitView>()
+    {
+        let size = split.bounds().size;
+        let total = if *across { size.width } else { size.height } - split.dividerThickness();
+        split.setPosition_ofDividerAtIndex((total * ratio).round(), 0);
+        let subs = split.subviews();
+        if subs.len() == 2 {
+            place_dividers(first, &subs.objectAtIndex(0));
+            place_dividers(second, &subs.objectAtIndex(1));
+        }
+    }
+}
+
 fn read_ratios(node: &mut Node, view: &NSView) {
-    if let Node::Split { across, ratio, first, second } = node
+    if let Node::Split {
+        across,
+        ratio,
+        first,
+        second,
+    } = node
         && let Some(split) = view.downcast_ref::<NSSplitView>()
     {
         let subs = split.subviews();

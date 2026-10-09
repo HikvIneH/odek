@@ -15,7 +15,12 @@ struct Arms {
 }
 
 const fn a(left: u8, right: u8, up: u8, down: u8) -> Option<Arms> {
-    Some(Arms { left, right, up, down })
+    Some(Arms {
+        left,
+        right,
+        up,
+        down,
+    })
 }
 
 fn arms(c: u32) -> Option<Arms> {

@@ -4,7 +4,11 @@
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Target {
     Url(String),
-    Path { path: String, line: Option<u32>, col: Option<u32> },
+    Path {
+        path: String,
+        line: Option<u32>,
+        col: Option<u32>,
+    },
 }
 
 const SCHEMES: [&str; 4] = ["https://", "http://", "file://", "mailto:"];
@@ -32,15 +36,22 @@ fn classify(chars: &[char], mut a: usize, mut b: usize) -> Option<(usize, usize,
     let text = |a: usize, b: usize| chars[a..b].iter().filter(|&&c| c != '\0').collect::<String>();
     // A URL may sit inside brackets or after "key=": find its scheme.
     let url_at = (a..b).find(|&i| {
-        let rest: String = chars[i..b].iter().take(8).collect::<String>().to_ascii_lowercase();
+        let rest: String = chars[i..b]
+            .iter()
+            .take(8)
+            .collect::<String>()
+            .to_ascii_lowercase();
         SCHEMES.iter().any(|s| rest.starts_with(s))
     });
     if let Some(i) = url_at {
         a = i;
         b = trim_end(chars, a, b);
         let url = text(a, b);
-        let min = SCHEMES.iter().find(|s| url.to_ascii_lowercase().starts_with(*s)).map_or(0, |s| s.len());
-        return (url.len() > min).then(|| (a, b, Target::Url(url)));
+        let min = SCHEMES
+            .iter()
+            .find(|s| url.to_ascii_lowercase().starts_with(*s))
+            .map_or(0, |s| s.len());
+        return (url.len() > min).then_some((a, b, Target::Url(url)));
     }
     while a < b && "([{'".contains(chars[a]) {
         a += 1;
@@ -49,7 +60,11 @@ fn classify(chars: &[char], mut a: usize, mut b: usize) -> Option<(usize, usize,
     // Optional :line[:col] suffix.
     let (mut end, mut nums) = (b, [None, None]);
     for slot in (0..2).rev() {
-        let digits = chars[a..end].iter().rev().take_while(|c| c.is_ascii_digit()).count();
+        let digits = chars[a..end]
+            .iter()
+            .rev()
+            .take_while(|c| c.is_ascii_digit())
+            .count();
         if digits == 0 || digits > 9 || end - digits <= a + 1 || chars[end - digits - 1] != ':' {
             break;
         }
@@ -62,7 +77,7 @@ fn classify(chars: &[char], mut a: usize, mut b: usize) -> Option<(usize, usize,
         _ => (None, None),
     };
     let path = text(a, end);
-    looks_like_path(&path).then(|| (a, b, Target::Path { path, line, col }))
+    looks_like_path(&path).then_some((a, b, Target::Path { path, line, col }))
 }
 
 /// Drop trailing punctuation; a closing bracket stays when it is balanced.
@@ -141,15 +156,27 @@ mod tests {
 
     #[test]
     fn urls() {
-        assert_eq!(url("see https://example.com/a?b=1#c now", 8).as_deref(), Some("https://example.com/a?b=1#c"));
+        assert_eq!(
+            url("see https://example.com/a?b=1#c now", 8).as_deref(),
+            Some("https://example.com/a?b=1#c")
+        );
         assert_eq!(url("see https://example.com/a?b=1#c now", 3), None);
-        assert_eq!(url("(https://example.com).", 3).as_deref(), Some("https://example.com"));
+        assert_eq!(
+            url("(https://example.com).", 3).as_deref(),
+            Some("https://example.com")
+        );
         assert_eq!(
             url("https://en.wikipedia.org/wiki/Rust_(language).", 5).as_deref(),
             Some("https://en.wikipedia.org/wiki/Rust_(language)")
         );
-        assert_eq!(url("[docs](https://x.io/d)", 10).as_deref(), Some("https://x.io/d"));
-        assert_eq!(url("go to http://localhost:3000, ok", 8).as_deref(), Some("http://localhost:3000"));
+        assert_eq!(
+            url("[docs](https://x.io/d)", 10).as_deref(),
+            Some("https://x.io/d")
+        );
+        assert_eq!(
+            url("go to http://localhost:3000, ok", 8).as_deref(),
+            Some("http://localhost:3000")
+        );
         assert_eq!(url("mail mailto:a@b.co;", 7).as_deref(), Some("mailto:a@b.co"));
         assert_eq!(url("file:///tmp/x.txt", 0).as_deref(), Some("file:///tmp/x.txt"));
         assert_eq!(url("https://", 2), None);
@@ -187,6 +214,13 @@ mod tests {
         let chars: Vec<char> = "世\0 src/世\0.rs".chars().collect();
         let (a, b, t) = detect(&chars, 4).unwrap();
         assert_eq!((a, b), (3, chars.len()));
-        assert_eq!(t, Target::Path { path: "src/世.rs".into(), line: None, col: None });
+        assert_eq!(
+            t,
+            Target::Path {
+                path: "src/世.rs".into(),
+                line: None,
+                col: None
+            }
+        );
     }
 }

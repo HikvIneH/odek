@@ -1,19 +1,23 @@
-//! `odek --term [dir]`: terminal windows, one shell each. (Phase 1 spike;
-//! the sidebar, tabs and splits come next.)
+//! `odek --term [dir]`: the app delegate for the terminal. Normal launches
+//! open the workspace window (see window.rs); the selftest snapshot mode
+//! uses plain one-shell windows.
 
 use std::cell::{OnceCell, RefCell};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use objc2::rc::{Retained, Weak};
 use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSApplication, NSApplicationDelegate, NSBackingStoreType, NSEventModifierFlags, NSMenu, NSMenuItem,
-    NSRequestUserAttentionType, NSWindow, NSWindowDelegate, NSWindowStyleMask, NSWorkspace,
+    NSAlert, NSAlertFirstButtonReturn, NSApplication, NSApplicationDelegate, NSApplicationTerminateReply,
+    NSBackingStoreType, NSEventModifierFlags, NSMenu, NSMenuItem, NSRequestUserAttentionType, NSWindow,
+    NSWindowDelegate, NSWindowStyleMask, NSWorkspace,
 };
 use objc2_foundation::{NSNotification, NSPoint, NSRect, NSSize, NSString, NSURL};
 
 use super::view::{TermView, ViewEvent};
+use super::window::Workbench;
 
 const APP_NAME: &str = "Odek";
 
@@ -21,7 +25,6 @@ thread_local! {
     static INSTANCE: OnceCell<Retained<TermApp>> = const { OnceCell::new() };
 }
 
-#[allow(dead_code)]
 fn instance() -> Option<Retained<TermApp>> {
     INSTANCE.with(|i| i.get().cloned())
 }
@@ -33,7 +36,10 @@ struct Pane {
 
 pub struct Ivars {
     start_dir: PathBuf,
+    /// A folder named on the command line: opened as a new tab.
+    open_dir: Option<PathBuf>,
     panes: RefCell<Vec<Pane>>,
+    bench: OnceCell<Rc<Workbench>>,
 }
 
 define_class!(
@@ -53,8 +59,10 @@ define_class!(
             if snap::active() {
                 return snap::start(self);
             }
-            let dir = self.ivars().start_dir.clone();
-            self.open_window(&dir, None, true);
+            let bench = Workbench::new(ProtocolObject::from_ref(self), self.mtm());
+            bench.start(self.ivars().open_dir.clone(), true);
+            let _ = self.ivars().bench.set(bench);
+            tick();
             app.activate();
         }
 
@@ -62,9 +70,40 @@ define_class!(
         fn terminate_after_last_window(&self, _app: &NSApplication) -> bool {
             true
         }
+
+        #[unsafe(method(applicationShouldTerminate:))]
+        fn should_terminate(&self, _app: &NSApplication) -> NSApplicationTerminateReply {
+            if self.confirm_running("Quit Odek?") {
+                NSApplicationTerminateReply::TerminateNow
+            } else {
+                NSApplicationTerminateReply::TerminateCancel
+            }
+        }
+
+        #[unsafe(method(applicationWillTerminate:))]
+        fn will_terminate(&self, _n: &NSNotification) {
+            if let Some(b) = self.ivars().bench.get() {
+                b.shutdown_all();
+            }
+        }
     }
 
     unsafe impl NSWindowDelegate for TermApp {
+        #[unsafe(method(windowShouldClose:))]
+        fn window_should_close(&self, sender: &NSWindow) -> bool {
+            match self.ivars().bench.get() {
+                Some(b) if std::ptr::eq(&*b.window, sender) => self.confirm_running("Close the window?"),
+                _ => true,
+            }
+        }
+
+        #[unsafe(method(windowDidBecomeKey:))]
+        fn window_did_become_key(&self, _n: &NSNotification) {
+            if let Some(b) = self.ivars().bench.get() {
+                b.window_became_key();
+            }
+        }
+
         #[unsafe(method(windowWillClose:))]
         fn window_will_close(&self, n: &NSNotification) {
             let Some(obj) = n.object() else { return };
@@ -77,6 +116,87 @@ define_class!(
     }
 
     impl TermApp {
+        #[unsafe(method(termNewTab:))]
+        fn menu_new_tab(&self, _sender: Option<&AnyObject>) {
+            self.with_bench(|b| b.new_tab());
+        }
+
+        #[unsafe(method(termNewGroup:))]
+        fn menu_new_group(&self, _sender: Option<&AnyObject>) {
+            self.with_bench(|b| b.new_group());
+        }
+
+        #[unsafe(method(termSplitRight:))]
+        fn menu_split_right(&self, _sender: Option<&AnyObject>) {
+            self.with_bench(|b| b.split(true));
+        }
+
+        #[unsafe(method(termSplitDown:))]
+        fn menu_split_down(&self, _sender: Option<&AnyObject>) {
+            self.with_bench(|b| b.split(false));
+        }
+
+        #[unsafe(method(termClosePane:))]
+        fn menu_close_pane(&self, _sender: Option<&AnyObject>) {
+            match self.ivars().bench.get() {
+                Some(b) => b.request_close_focused(),
+                None => {
+                    let app = NSApplication::sharedApplication(self.mtm());
+                    if let Some(w) = app.keyWindow() {
+                        w.performClose(None);
+                    }
+                }
+            }
+        }
+
+        #[unsafe(method(termCloseTab:))]
+        fn menu_close_tab(&self, _sender: Option<&AnyObject>) {
+            self.with_bench(|b| b.request_close_active_tab());
+        }
+
+        #[unsafe(method(termRenameTab:))]
+        fn menu_rename_tab(&self, _sender: Option<&AnyObject>) {
+            self.with_bench(|b| b.rename_active_tab());
+        }
+
+        #[unsafe(method(termNextTab:))]
+        fn menu_next_tab(&self, _sender: Option<&AnyObject>) {
+            self.with_bench(|b| b.cycle_tab(true));
+        }
+
+        #[unsafe(method(termPreviousTab:))]
+        fn menu_previous_tab(&self, _sender: Option<&AnyObject>) {
+            self.with_bench(|b| b.cycle_tab(false));
+        }
+
+        #[unsafe(method(termNextPane:))]
+        fn menu_next_pane(&self, _sender: Option<&AnyObject>) {
+            self.with_bench(|b| b.cycle_pane(true));
+        }
+
+        #[unsafe(method(termPreviousPane:))]
+        fn menu_previous_pane(&self, _sender: Option<&AnyObject>) {
+            self.with_bench(|b| b.cycle_pane(false));
+        }
+
+        #[unsafe(method(termSelectTab:))]
+        fn menu_select_tab(&self, sender: Option<&NSMenuItem>) {
+            if let Some(item) = sender {
+                let n = item.tag() as usize;
+                self.with_bench(|b| b.select_index(n));
+            }
+        }
+
+        #[unsafe(method(termToggleSidebar:))]
+        fn menu_toggle_sidebar(&self, _sender: Option<&AnyObject>) {
+            self.with_bench(|b| b.toggle_sidebar());
+        }
+
+        #[unsafe(method(termSearchTabs:))]
+        fn menu_search_tabs(&self, _sender: Option<&AnyObject>) {
+            self.with_bench(|b| b.search_tabs());
+        }
+
         #[unsafe(method(termNewWindow:))]
         fn menu_new_window(&self, _sender: Option<&AnyObject>) {
             let dir = self.key_view().and_then(|v| v.session_cwd()).unwrap_or_else(|| self.ivars().start_dir.clone());
@@ -103,8 +223,17 @@ define_class!(
 );
 
 impl TermApp {
-    pub fn new(start_dir: PathBuf, mtm: MainThreadMarker) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(Ivars { start_dir, panes: RefCell::new(Vec::new()) });
+    pub fn new(open_dir: Option<PathBuf>, mtm: MainThreadMarker) -> Retained<Self> {
+        let start_dir = open_dir
+            .clone()
+            .or_else(|| std::env::var_os("HOME").map(Into::into))
+            .unwrap_or_else(|| "/".into());
+        let this = Self::alloc(mtm).set_ivars(Ivars {
+            start_dir,
+            open_dir,
+            panes: RefCell::new(Vec::new()),
+            bench: OnceCell::new(),
+        });
         let this: Retained<Self> = unsafe { msg_send![super(this), init] };
         INSTANCE.with(|i| {
             let _ = i.set(this.clone());
@@ -112,10 +241,41 @@ impl TermApp {
         this
     }
 
+    fn with_bench(&self, f: impl FnOnce(&Workbench)) {
+        if let Some(b) = self.ivars().bench.get() {
+            f(b);
+        }
+    }
+
+    /// The terminal with keyboard focus.
     fn key_view(&self) -> Option<Retained<TermView>> {
         let app = NSApplication::sharedApplication(self.mtm());
-        let key = app.keyWindow()?;
-        self.ivars().panes.borrow().iter().find(|p| std::ptr::eq(&*p.window, &*key)).map(|p| p.view.clone())
+        let responder = app.keyWindow()?.firstResponder()?;
+        responder.downcast::<TermView>().ok()
+    }
+
+    /// True when nothing is running, or the user agrees to end it.
+    fn confirm_running(&self, question: &str) -> bool {
+        let Some(b) = self.ivars().bench.get() else {
+            return true;
+        };
+        let running = b.running_everywhere();
+        if running.is_empty() {
+            return true;
+        }
+        let mtm = self.mtm();
+        let alert = NSAlert::new(mtm);
+        alert.setMessageText(&NSString::from_str(question));
+        let mut names = running.clone();
+        names.sort();
+        names.dedup();
+        alert.setInformativeText(&NSString::from_str(&format!(
+            "Still running: {}. Closing ends these processes.",
+            names.join(", ")
+        )));
+        alert.addButtonWithTitle(&NSString::from_str("Close"));
+        alert.addButtonWithTitle(&NSString::from_str("Cancel"));
+        alert.runModal() == NSAlertFirstButtonReturn
     }
 
     fn zoom(&self, delta: f64) {
@@ -127,7 +287,10 @@ impl TermApp {
     pub fn open_window(&self, dir: &Path, command: Option<&str>, show: bool) -> Retained<TermView> {
         let mtm = self.mtm();
         // 100×30 cells.
-        let probe = TermView::new(NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(100.0, 100.0)), mtm);
+        let probe = TermView::new(
+            NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(100.0, 100.0)),
+            mtm,
+        );
         let (cw, ch) = probe.cell_size();
         probe.shutdown();
         let (px, py) = TermView::padding();
@@ -171,7 +334,10 @@ impl TermApp {
                 ViewEvent::Focused => {}
                 // Default app for now; an in-app editor can take over later.
                 ViewEvent::OpenPath { path, .. } => {
-                    if let Some(url) = path.to_str().map(|p| NSURL::fileURLWithPath(&NSString::from_str(p))) {
+                    if let Some(url) = path
+                        .to_str()
+                        .map(|p| NSURL::fileURLWithPath(&NSString::from_str(p)))
+                    {
                         NSWorkspace::sharedWorkspace().openURL(&url);
                     }
                 }
@@ -185,7 +351,10 @@ impl TermApp {
             window.center();
             window.makeKeyAndOrderFront(None);
         }
-        self.ivars().panes.borrow_mut().push(Pane { window, view: view.clone() });
+        self.ivars().panes.borrow_mut().push(Pane {
+            window,
+            view: view.clone(),
+        });
         view
     }
 
@@ -193,6 +362,7 @@ impl TermApp {
         let mtm = self.mtm();
         let cmd = NSEventModifierFlags::Command;
         let opt = NSEventModifierFlags::Option;
+        let shift = NSEventModifierFlags::Shift;
         let item = |title: &str, action: Option<Sel>, key: &str, mods: NSEventModifierFlags| {
             let it = unsafe {
                 NSMenuItem::initWithTitle_action_keyEquivalent(
@@ -220,7 +390,12 @@ impl TermApp {
             menu(
                 APP_NAME,
                 vec![
-                    item(&format!("About {APP_NAME}"), Some(sel!(orderFrontStandardAboutPanel:)), "", cmd),
+                    item(
+                        &format!("About {APP_NAME}"),
+                        Some(sel!(orderFrontStandardAboutPanel:)),
+                        "",
+                        cmd,
+                    ),
                     sep(),
                     item(&format!("Hide {APP_NAME}"), Some(sel!(hide:)), "h", cmd),
                     item("Hide Others", Some(sel!(hideOtherApplications:)), "h", cmd | opt),
@@ -231,9 +406,16 @@ impl TermApp {
             menu(
                 "Shell",
                 vec![
-                    item("New Window", Some(sel!(termNewWindow:)), "n", cmd),
+                    item("New Tab", Some(sel!(termNewTab:)), "t", cmd),
+                    item("New Group…", Some(sel!(termNewGroup:)), "n", cmd | shift),
                     sep(),
-                    item("Close Window", Some(sel!(performClose:)), "w", cmd),
+                    item("Split Right", Some(sel!(termSplitRight:)), "d", cmd),
+                    item("Split Down", Some(sel!(termSplitDown:)), "d", cmd | shift),
+                    sep(),
+                    item("Rename Tab…", Some(sel!(termRenameTab:)), "r", cmd | shift),
+                    sep(),
+                    item("Close Pane", Some(sel!(termClosePane:)), "w", cmd),
+                    item("Close Tab", Some(sel!(termCloseTab:)), "w", cmd | shift),
                 ],
             ),
             menu(
@@ -245,21 +427,50 @@ impl TermApp {
                     sep(),
                     item("Find…", Some(sel!(termFind:)), "f", cmd),
                     item("Find Next", Some(sel!(termFindNext:)), "g", cmd),
-                    item("Find Previous", Some(sel!(termFindPrevious:)), "g", cmd | NSEventModifierFlags::Shift),
+                    item("Find Previous", Some(sel!(termFindPrevious:)), "g", cmd | shift),
                     sep(),
                     item("Clear Scrollback", Some(sel!(clearScrollback:)), "k", cmd),
-                    item("Emoji & Symbols", Some(sel!(orderFrontCharacterPalette:)), "", cmd),
+                    item(
+                        "Emoji & Symbols",
+                        Some(sel!(orderFrontCharacterPalette:)),
+                        "",
+                        cmd,
+                    ),
                 ],
             ),
             menu(
                 "View",
                 vec![
+                    item("Toggle Sidebar", Some(sel!(termToggleSidebar:)), "b", cmd),
+                    item("Search Tabs…", Some(sel!(termSearchTabs:)), "f", cmd | shift),
+                    sep(),
                     item("Bigger", Some(sel!(termZoomIn:)), "+", cmd),
                     item("Smaller", Some(sel!(termZoomOut:)), "-", cmd),
                     item("Actual Size", Some(sel!(termZoomReset:)), "0", cmd),
                 ],
             ),
-            menu("Window", vec![item("Minimize", Some(sel!(performMiniaturize:)), "m", cmd)]),
+            menu("Window", {
+                let mut items = vec![
+                    item("Minimize", Some(sel!(performMiniaturize:)), "m", cmd),
+                    sep(),
+                    item("Next Tab", Some(sel!(termNextTab:)), "]", cmd | shift),
+                    item("Previous Tab", Some(sel!(termPreviousTab:)), "[", cmd | shift),
+                    item("Next Pane", Some(sel!(termNextPane:)), "]", cmd),
+                    item("Previous Pane", Some(sel!(termPreviousPane:)), "[", cmd),
+                    sep(),
+                ];
+                for n in 1..=9 {
+                    let title = if n == 9 {
+                        "Last Tab".to_string()
+                    } else {
+                        format!("Tab {n}")
+                    };
+                    let it = item(&title, Some(sel!(termSelectTab:)), &n.to_string(), cmd);
+                    it.setTag(n);
+                    items.push(it);
+                }
+                items
+            }),
         ] {
             bar.addItem(&m);
         }
@@ -276,7 +487,18 @@ fn title_for(dir: &Path) -> String {
     }
 }
 
-pub fn run(start_dir: PathBuf) {
+/// Every second, on the main thread: refresh folders and status, save.
+fn tick() {
+    if let Some(app) = instance()
+        && let Some(b) = app.ivars().bench.get()
+    {
+        b.tick();
+    }
+    let when = dispatch2::DispatchTime::try_from(std::time::Duration::from_secs(1)).unwrap();
+    let _ = dispatch2::DispatchQueue::main().after(when, tick);
+}
+
+pub fn run(open_dir: Option<PathBuf>) {
     let mtm = MainThreadMarker::new().expect("must run on the main thread");
     let app = NSApplication::sharedApplication(mtm);
     #[cfg(feature = "selftest")]
@@ -288,7 +510,7 @@ pub fn run(start_dir: PathBuf) {
     #[cfg(not(feature = "selftest"))]
     let policy = objc2_app_kit::NSApplicationActivationPolicy::Regular;
     app.setActivationPolicy(policy);
-    let delegate = TermApp::new(start_dir, mtm);
+    let delegate = TermApp::new(open_dir, mtm);
     app.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
     app.run();
 }
@@ -304,7 +526,10 @@ mod snap {
     use std::time::Duration;
 
     use dispatch2::{DispatchQueue, DispatchTime};
-    use objc2::DefinedClass;
+    use objc2::runtime::ProtocolObject;
+    use objc2::{DefinedClass, MainThreadOnly};
+
+    use super::super::window::Workbench;
     use objc2::rc::Retained;
     use objc2_app_kit::{NSApplication, NSBitmapImageFileType, NSView};
     use objc2_foundation::NSDictionary;
@@ -312,8 +537,11 @@ mod snap {
     use super::super::view::TermView;
     use super::TermApp;
 
+    /// The view, the steps left (last first) and the output folder.
+    type Script = (Retained<TermView>, Vec<String>, PathBuf);
+
     thread_local! {
-        static STATE: RefCell<Option<(Retained<TermView>, Vec<String>, PathBuf)>> = const { RefCell::new(None) };
+        static STATE: RefCell<Option<Script>> = const { RefCell::new(None) };
     }
 
     pub fn active() -> bool {
@@ -332,7 +560,19 @@ mod snap {
             .rev()
             .collect();
         let dir = app.ivars().start_dir.clone();
-        let view = app.open_window(&dir, cmd.as_deref(), false);
+        // ODEK_TERM_WS=1: drive the workspace window instead of a plain one.
+        let view = if std::env::var_os("ODEK_TERM_WS").is_some() {
+            let bench = Workbench::new(ProtocolObject::from_ref(app), app.mtm());
+            bench
+                .window
+                .setContentSize(objc2_foundation::NSSize::new(1200.0, 700.0));
+            bench.start(Some(dir), false);
+            let view = bench.focused_term().unwrap();
+            let _ = app.ivars().bench.set(bench);
+            view
+        } else {
+            app.open_window(&dir, cmd.as_deref(), false)
+        };
         println!("SNAP pid={}", std::process::id());
         STATE.with(|s| *s.borrow_mut() = Some((view, steps, out)));
         next();
@@ -351,14 +591,59 @@ mod snap {
             let (v, _, o) = s.as_ref().unwrap();
             (v.clone(), o.clone())
         });
+        let bench = super::instance().and_then(|a| a.ivars().bench.get().cloned());
+        // In the workspace, steps act on the focused pane.
+        let view = bench.as_ref().and_then(|b| b.focused_term()).unwrap_or(view);
         let (verb, arg) = step.split_once(' ').unwrap_or((&step, ""));
         match verb {
             "wait" => return after(arg.parse().unwrap_or(1.0)),
             "keys" => {
-                let text = arg.replace("\\r", "\r").replace("\\e", "\x1b").replace("\\t", "\t");
+                let text = arg
+                    .replace("\\r", "\r")
+                    .replace("\\e", "\x1b")
+                    .replace("\\t", "\t");
                 view.write(text.as_bytes());
             }
             "insert" => view.commit_text(arg),
+            "newtab" => bench.iter().for_each(|b| b.new_tab()),
+            "split" => bench.iter().for_each(|b| b.split(arg != "down")),
+            "rename" => bench.iter().for_each(|b| b.name_active_tab(arg)),
+            "group" => bench.iter().for_each(|b| b.move_active_to_new_group(arg)),
+            "nexttab" => bench.iter().for_each(|b| b.cycle_tab(true)),
+            "frames" => {
+                fn dump(v: &objc2_app_kit::NSView, depth: usize) {
+                    let f = v.frame();
+                    println!(
+                        "SNAP {}{} ({:.0},{:.0} {:.0}x{:.0}){}",
+                        "  ".repeat(depth),
+                        v.class().name().to_str().unwrap_or("?"),
+                        f.origin.x,
+                        f.origin.y,
+                        f.size.width,
+                        f.size.height,
+                        if v.isHidden() { " hidden" } else { "" }
+                    );
+                    if depth < 7 {
+                        for sub in v.subviews().iter() {
+                            dump(&sub, depth + 1);
+                        }
+                    }
+                }
+                if let Some(content) = bench.as_ref().and_then(|b| b.window.contentView()) {
+                    dump(&content, 0);
+                }
+            }
+            "snappane" => {
+                if let Some(container) = unsafe { view.superview() } {
+                    snapshot(&container, &out.join(format!("{arg}.png")));
+                }
+            }
+            "snapws" => {
+                if let Some(content) = bench.as_ref().and_then(|b| b.window.contentView()) {
+                    snapshot(&content, &out.join(format!("{arg}.png")));
+                    println!("SNAP {arg}: footprint {:.1} MB", footprint_mb());
+                }
+            }
             "mark" => view.mark_text(arg, objc2_foundation::NSRange::new(arg.encode_utf16().count(), 0)),
             "resize" => {
                 if let Some((w, h)) = arg.split_once('x') {
@@ -410,17 +695,29 @@ mod snap {
     fn footprint_mb() -> f64 {
         let mut info: libc::rusage_info_v0 = unsafe { std::mem::zeroed() };
         let ok = unsafe {
-            libc::proc_pid_rusage(std::process::id() as i32, libc::RUSAGE_INFO_V0, (&raw mut info).cast())
+            libc::proc_pid_rusage(
+                std::process::id() as i32,
+                libc::RUSAGE_INFO_V0,
+                (&raw mut info).cast(),
+            )
         } == 0;
-        if ok { info.ri_phys_footprint as f64 / 1048576.0 } else { 0.0 }
+        if ok {
+            info.ri_phys_footprint as f64 / 1048576.0
+        } else {
+            0.0
+        }
     }
 
     fn snapshot(view: &NSView, path: &std::path::Path) {
         let bounds = view.bounds();
-        let Some(rep) = view.bitmapImageRepForCachingDisplayInRect(bounds) else { return };
+        let Some(rep) = view.bitmapImageRepForCachingDisplayInRect(bounds) else {
+            return;
+        };
         view.cacheDisplayInRect_toBitmapImageRep(bounds, &rep);
         let props = NSDictionary::new();
-        if let Some(data) = unsafe { rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &props) } {
+        if let Some(data) =
+            unsafe { rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &props) }
+        {
             let _ = std::fs::write(path, data.to_vec());
         }
     }

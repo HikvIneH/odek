@@ -14,30 +14,34 @@ use objc2::rc::{Retained, Weak};
 use objc2::runtime::{AnyObject, NSObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
 use objc2_app_kit::{
-    NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSBezierPath, NSColor, NSCursor, NSEvent, NSEventModifierFlags,
-    NSFont, NSFontAttributeName, NSFontManager, NSFontTraitMask, NSFontWeightRegular,
-    NSForegroundColorAttributeName, NSPasteboard, NSPasteboardTypeString, NSResponder, NSStrikethroughStyleAttributeName,
-    NSStringDrawing, NSTextInputClient, NSTrackingArea, NSTrackingAreaOptions, NSUnderlineStyleAttributeName, NSView,
-    NSWorkspace,
+    NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSBezierPath, NSColor,
+    NSCursor, NSEvent, NSEventModifierFlags, NSFont, NSFontAttributeName, NSFontManager, NSFontTraitMask,
+    NSFontWeightRegular, NSForegroundColorAttributeName, NSPasteboard, NSPasteboardTypeString, NSResponder,
+    NSStrikethroughStyleAttributeName, NSStringDrawing, NSTextInputClient, NSTrackingArea,
+    NSTrackingAreaOptions, NSUnderlineStyleAttributeName, NSView, NSWorkspace,
 };
 use objc2_foundation::{
-    NSArray, NSDictionary, NSNumber, NSPoint, NSRange, NSRangePointer, NSRect, NSSize, NSString, NSUInteger, NSURL,
-    NSUserDefaults,
+    NSArray, NSDictionary, NSNumber, NSPoint, NSRange, NSRangePointer, NSRect, NSSize, NSString, NSUInteger,
+    NSURL, NSUserDefaults,
 };
 
 use super::findbar::{self, FindState};
-use super::ime::{self, Ime};
 use super::grid::{Cell as GCell, Color, Line, Style, attr, flag};
+use super::ime::{self, Ime};
 use super::input::{self, Mods};
 use super::links::{self, Target};
 use super::session::{Session, Spawn};
-use super::term::{CursorShape, Event, MouseMode, Term};
+use super::vt::{CursorShape, Event, MouseMode, Term};
 
 const PAD_X: f64 = 10.0;
 const PAD_Y: f64 = 6.0;
 pub const DEFAULT_FONT_SIZE: f64 = 13.0;
 
+type EventHandler = Box<dyn Fn(ViewEvent)>;
+
 /// What a view tells its owner (window or pane container).
+// Payloads not read yet are for desktop notifications and opening files at a line.
+#[allow(dead_code)]
 pub enum ViewEvent {
     Title(String),
     /// Bell or desktop notification from the program.
@@ -46,7 +50,11 @@ pub enum ViewEvent {
     /// The view became first responder.
     Focused,
     /// A file path was ⌘-clicked; it exists. The owner decides how to open it.
-    OpenPath { path: PathBuf, line: Option<u32>, col: Option<u32> },
+    OpenPath {
+        path: PathBuf,
+        line: Option<u32>,
+        col: Option<u32>,
+    },
 }
 
 thread_local! {
@@ -87,8 +95,8 @@ const DARK: Theme = Theme {
     fg: 0xE6EDF3,
     bg: 0x0D1117,
     ansi: [
-        0x484F58, 0xFF7B72, 0x3FB950, 0xD29922, 0x58A6FF, 0xBC8CFF, 0x39C5CF, 0xB1BAC4, 0x6E7681, 0xFFA198, 0x56D364,
-        0xE3B341, 0x79C0FF, 0xD2A8FF, 0x56D4DD, 0xFFFFFF,
+        0x484F58, 0xFF7B72, 0x3FB950, 0xD29922, 0x58A6FF, 0xBC8CFF, 0x39C5CF, 0xB1BAC4, 0x6E7681, 0xFFA198,
+        0x56D364, 0xE3B341, 0x79C0FF, 0xD2A8FF, 0x56D4DD, 0xFFFFFF,
     ],
 };
 
@@ -96,8 +104,8 @@ const LIGHT: Theme = Theme {
     fg: 0x1F2328,
     bg: 0xFFFFFF,
     ansi: [
-        0x24292F, 0xCF222E, 0x116329, 0x4D2D00, 0x0969DA, 0x8250DF, 0x1B7C83, 0x6E7781, 0x57606A, 0xA40E26, 0x1A7F37,
-        0x633C01, 0x218BFF, 0xA475F9, 0x3192AA, 0x8C959F,
+        0x24292F, 0xCF222E, 0x116329, 0x4D2D00, 0x0969DA, 0x8250DF, 0x1B7C83, 0x6E7781, 0x57606A, 0xA40E26,
+        0x1A7F37, 0x633C01, 0x218BFF, 0xA475F9, 0x3192AA, 0x8C959F,
     ],
 };
 
@@ -152,7 +160,7 @@ fn rgb_tuple(c: u32) -> (u8, u8, u8) {
 pub struct Ivars {
     id: u64,
     session: RefCell<Option<Session>>,
-    on_event: RefCell<Option<Box<dyn Fn(ViewEvent)>>>,
+    on_event: RefCell<Option<EventHandler>>,
     font_size: Cell<f64>,
     fonts: RefCell<[Retained<NSFont>; 4]>,
     metrics: Cell<Metrics>,
@@ -431,6 +439,9 @@ impl TermView {
             ime: Ime::default(),
         });
         let this: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame] };
+        // Since macOS 14 views draw outside their bounds unless told not to;
+        // the background fill would cover neighbours such as pane headers.
+        this.setClipsToBounds(true);
         VIEWS.with(|v| v.borrow_mut().insert(id, Weak::from_retained(&this)));
         this.update_theme();
         let opts = NSTrackingAreaOptions::MouseMoved
@@ -438,7 +449,13 @@ impl TermView {
             | NSTrackingAreaOptions::ActiveInKeyWindow
             | NSTrackingAreaOptions::InVisibleRect;
         let area = unsafe {
-            NSTrackingArea::initWithRect_options_owner_userInfo(NSTrackingArea::alloc(), NSRect::ZERO, opts, Some(&*this), None)
+            NSTrackingArea::initWithRect_options_owner_userInfo(
+                NSTrackingArea::alloc(),
+                NSRect::ZERO,
+                opts,
+                Some(&*this),
+                None,
+            )
         };
         this.addTrackingArea(&area);
         this
@@ -460,7 +477,13 @@ impl TermView {
             });
         });
         let m = self.ivars().metrics.get();
-        let opts = Spawn { cwd, command, cols, rows, cell_px: (m.cw.round() as u16, m.ch.round() as u16) };
+        let opts = Spawn {
+            cwd,
+            command,
+            cols,
+            rows,
+            cell_px: (m.cw.round() as u16, m.ch.round() as u16),
+        };
         let session = Session::spawn(&opts, wake)?;
         {
             let mut t = session.term.lock().unwrap();
@@ -484,13 +507,19 @@ impl TermView {
     }
 
     pub fn foreground_name(&self) -> Option<String> {
-        self.ivars().session.borrow().as_ref().and_then(Session::foreground_name)
+        self.ivars()
+            .session
+            .borrow()
+            .as_ref()
+            .and_then(Session::foreground_name)
     }
 
+    #[cfg_attr(not(feature = "selftest"), allow(dead_code))]
     pub fn mem_bytes(&self) -> usize {
         self.with_term(|t| t.mem_bytes()).unwrap_or(0)
     }
 
+    #[cfg_attr(not(feature = "selftest"), allow(dead_code))]
     pub fn screen_text(&self) -> String {
         self.with_term(|t| t.screen_text()).unwrap_or_default()
     }
@@ -641,7 +670,13 @@ impl TermView {
                 let mut t = s.term.lock().unwrap();
                 let events = std::mem::take(&mut t.events);
                 let (all, dirty) = t.take_dirty();
-                (events, all, dirty, t.cursor_pos().0, s.exited.lock().unwrap().is_some())
+                (
+                    events,
+                    all,
+                    dirty,
+                    t.cursor_pos().0,
+                    s.exited.lock().unwrap().is_some(),
+                )
             })
         }) else {
             return;
@@ -715,8 +750,15 @@ impl TermView {
         let m = self.ivars().metrics.get();
         let top = self.top_index(&t);
         let r0 = ((dirty.origin.y - PAD_Y) / m.ch).floor().max(0.0) as usize;
-        let r1 = (((dirty.origin.y + dirty.size.height - PAD_Y) / m.ch).ceil().max(0.0) as usize).min(t.rows);
-        let sel = self.ivars().selection.get().map(|(a, b)| if a <= b { (a, b) } else { (b, a) });
+        let r1 = (((dirty.origin.y + dirty.size.height - PAD_Y) / m.ch)
+            .ceil()
+            .max(0.0) as usize)
+            .min(t.rows);
+        let sel = self
+            .ivars()
+            .selection
+            .get()
+            .map(|(a, b)| if a <= b { (a, b) } else { (b, a) });
         let first = t.first_id();
         for r in r0..r1 {
             let idx = top + r;
@@ -747,7 +789,16 @@ impl TermView {
             let (row, col) = t.cursor_pos();
             let origin = NSPoint::new(PAD_X + col as f64 * m.cw, PAD_Y + row as f64 * m.ch);
             let (fg, bg) = (self.color(theme.fg), self.color(theme.bg));
-            ime::draw_marked(&text, origin, m.cw, m.ch, t.cols.saturating_sub(col), &fg, &bg, &self.ivars().fonts.borrow()[0]);
+            ime::draw_marked(
+                &text,
+                origin,
+                m.cw,
+                m.ch,
+                t.cols.saturating_sub(col),
+                &fg,
+                &bg,
+                &self.ivars().fonts.borrow()[0],
+            );
         }
     }
 
@@ -791,7 +842,11 @@ impl TermView {
             buf.clear();
             if cell.flags == 0 && cell.ch < 0x7f {
                 // A run of plain ASCII in one style draws as one string.
-                while c < cells.len() && cells[c].flags == 0 && cells[c].ch < 0x7f && cells[c].style == cell.style {
+                while c < cells.len()
+                    && cells[c].flags == 0
+                    && cells[c].ch < 0x7f
+                    && cells[c].style == cell.style
+                {
                     buf.push(cells[c].ch as u8 as char);
                     c += 1;
                 }
@@ -812,7 +867,11 @@ impl TermView {
                 let (fg, _) = theme.resolve(&style);
                 self.color(fg).setFill();
                 self.color(fg).setStroke();
-                super::boxdraw::draw(cell.ch, NSRect::new(NSPoint::new(x, y), NSSize::new(m.cw, m.ch)), scale);
+                super::boxdraw::draw(
+                    cell.ch,
+                    NSRect::new(NSPoint::new(x, y), NSSize::new(m.cw, m.ch)),
+                    scale,
+                );
                 continue;
             }
             let attrs = self.attrs_for(cell.style, &style);
@@ -822,7 +881,9 @@ impl TermView {
 
     fn draw_link_underline(&self, t: &Term, line: &Line, (a, b): (usize, usize), y: f64) {
         let m = self.ivars().metrics.get();
-        let (fg, _) = self.theme().resolve(&t.styles.get(line.cells.get(a).map_or(0, |c| c.style)));
+        let (fg, _) = self
+            .theme()
+            .resolve(&t.styles.get(line.cells.get(a).map_or(0, |c| c.style)));
         self.color(fg).setFill();
         let r = cell_rect(m, a, b - a, y + m.ch - 2.0);
         NSBezierPath::fillRect(NSRect::new(r.origin, NSSize::new(r.size.width, 1.0)));
@@ -872,7 +933,9 @@ impl TermView {
                             &[&**font as &AnyObject, &*bg as &AnyObject],
                         )
                     };
-                    unsafe { NSString::from_str(&text).drawAtPoint_withAttributes(rect.origin, Some(&attrs)) };
+                    unsafe {
+                        NSString::from_str(&text).drawAtPoint_withAttributes(rect.origin, Some(&attrs))
+                    };
                 }
             }
         }
@@ -883,7 +946,11 @@ impl TermView {
         if let Some(s) = self.ivars().session.borrow().as_ref()
             && s.term.lock().unwrap().modes.focus_events
         {
-            s.write(if on { b"\x1b[I".to_vec() } else { b"\x1b[O".to_vec() });
+            s.write(if on {
+                b"\x1b[I".to_vec()
+            } else {
+                b"\x1b[O".to_vec()
+            });
         }
         let ch = self.ivars().metrics.get().ch;
         let row = self.ivars().cursor_row.get();
@@ -919,7 +986,10 @@ impl TermView {
             cmd: flags.contains(NSEventModifierFlags::Command),
         };
         let chars = event.characters().map(|s| s.to_string()).unwrap_or_default();
-        let bare = event.charactersIgnoringModifiers().map(|s| s.to_string()).unwrap_or_default();
+        let bare = event
+            .charactersIgnoringModifiers()
+            .map(|s| s.to_string())
+            .unwrap_or_default();
         let key = bare.chars().next().map_or(0, |c| c as u32);
 
         // Shift+PageUp/PageDown/Home/End scroll the view, not the program.
@@ -996,7 +1066,8 @@ impl TermView {
 
     /// Scroll the view back (positive) or forward (negative) by lines.
     pub(super) fn scroll_lines(&self, n: isize) {
-        let Some((first, total, rows, alt)) = self.with_term(|t| (t.first_id(), t.total_lines(), t.rows, t.alt_active))
+        let Some((first, total, rows, alt)) =
+            self.with_term(|t| (t.first_id(), t.total_lines(), t.rows, t.alt_active))
         else {
             return;
         };
@@ -1009,7 +1080,11 @@ impl TermView {
             None => live,
         };
         let top = (cur - n).clamp(0, live);
-        self.ivars().anchor.set(if top >= live { None } else { Some(first + top as u64) });
+        self.ivars().anchor.set(if top >= live {
+            None
+        } else {
+            Some(first + top as u64)
+        });
         self.setNeedsDisplay(true);
     }
 
@@ -1070,7 +1145,10 @@ impl TermView {
     fn pos_at(&self, p: NSPoint) -> Option<Pos> {
         let (col, row) = self.cell_at(p)?;
         let (first, top) = self.with_term(|t| (t.first_id(), self.top_index(t)))?;
-        Some(Pos { line: first + (top + row) as u64, col })
+        Some(Pos {
+            line: first + (top + row) as u64,
+            col,
+        })
     }
 
     fn handle_mouse(&self, event: &NSEvent, kind: MouseKind) {
@@ -1095,7 +1173,13 @@ impl TermView {
                 };
                 let button = if kind == MouseKind::Drag { 32 } else { 0 };
                 let col = col.min(self.with_term(|t| t.cols - 1).unwrap_or(0));
-                self.write(&input::encode_mouse_sgr(button, col, row, kind != MouseKind::Up, mods));
+                self.write(&input::encode_mouse_sgr(
+                    button,
+                    col,
+                    row,
+                    kind != MouseKind::Up,
+                    mods,
+                ));
             }
             return;
         }
@@ -1152,7 +1236,8 @@ impl TermView {
     /// (line id, col) of the cell under a point, if inside the grid.
     fn hover_cell(&self, p: NSPoint) -> Option<(u64, usize)> {
         let m = self.ivars().metrics.get();
-        let (cols, rows, first, top) = self.with_term(|t| (t.cols, t.rows, t.first_id(), self.top_index(t)))?;
+        let (cols, rows, first, top) =
+            self.with_term(|t| (t.cols, t.rows, t.first_id(), self.top_index(t)))?;
         let (x, y) = (p.x - PAD_X, p.y - PAD_Y);
         if x < 0.0 || y < 0.0 {
             return None;
@@ -1195,7 +1280,11 @@ impl TermView {
             Some(rest) => PathBuf::from(std::env::var_os("HOME")?).join(rest),
             None => PathBuf::from(path),
         };
-        let p = if p.is_absolute() { p } else { self.session_cwd()?.join(p) };
+        let p = if p.is_absolute() {
+            p
+        } else {
+            self.session_cwd()?.join(p)
+        };
         p.exists().then_some(p)
     }
 
@@ -1214,7 +1303,11 @@ impl TermView {
             std::mem::replace(&mut h.span, span)
         };
         if old.is_some() != span.is_some() {
-            let cursor = if span.is_some() { NSCursor::pointingHandCursor() } else { NSCursor::IBeamCursor() };
+            let cursor = if span.is_some() {
+                NSCursor::pointingHandCursor()
+            } else {
+                NSCursor::IBeamCursor()
+            };
             cursor.set();
         }
         for (l, ..) in old.into_iter().chain(span) {
@@ -1223,7 +1316,9 @@ impl TermView {
     }
 
     fn invalidate_line(&self, id: u64) {
-        let Some(row) = self.with_term(|t| id.checked_sub(t.first_id() + self.top_index(t) as u64)) else { return };
+        let Some(row) = self.with_term(|t| id.checked_sub(t.first_id() + self.top_index(t) as u64)) else {
+            return;
+        };
         let Some(row) = row else { return };
         let m = self.ivars().metrics.get();
         self.setNeedsDisplayInRect(NSRect::new(
@@ -1244,8 +1339,12 @@ impl TermView {
         if !cmd {
             return false;
         }
-        let Some((line, col)) = self.hover_cell(p) else { return false };
-        let Some((_, _, target)) = self.link_at(line, col) else { return false };
+        let Some((line, col)) = self.hover_cell(p) else {
+            return false;
+        };
+        let Some((_, _, target)) = self.link_at(line, col) else {
+            return false;
+        };
         self.ivars().hover.borrow_mut().swallow = true;
         self.open_target(target);
         true
@@ -1254,7 +1353,9 @@ impl TermView {
     fn open_target(&self, target: Target) {
         match target {
             Target::Url(u) => {
-                let Some(url) = NSURL::URLWithString(&NSString::from_str(&u)) else { return };
+                let Some(url) = NSURL::URLWithString(&NSString::from_str(&u)) else {
+                    return;
+                };
                 if url.isFileURL() {
                     if let Some(path) = url.path() {
                         self.open_path(&path.to_string(), None, None);
@@ -1286,7 +1387,16 @@ impl TermView {
 
     fn line_span(&self, pos: Pos) -> (Pos, Pos) {
         let cols = self.with_term(|t| t.cols).unwrap_or(0);
-        (Pos { line: pos.line, col: 0 }, Pos { line: pos.line, col: cols })
+        (
+            Pos {
+                line: pos.line,
+                col: 0,
+            },
+            Pos {
+                line: pos.line,
+                col: cols,
+            },
+        )
     }
 
     /// Word around a position: letters, digits and path characters.
@@ -1301,7 +1411,13 @@ impl TermView {
         let is_word = |c: char| c.is_alphanumeric() || "_-./~:@%+#=".contains(c);
         let at = pos.col.min(chars.len().saturating_sub(1));
         if chars.get(at).is_none_or(|&c| !is_word(c)) {
-            return (pos, Pos { line: pos.line, col: (pos.col + 1).min(chars.len()) });
+            return (
+                pos,
+                Pos {
+                    line: pos.line,
+                    col: (pos.col + 1).min(chars.len()),
+                },
+            );
         }
         let mut a = at;
         while a > 0 && is_word(chars[a - 1]) {
@@ -1311,7 +1427,16 @@ impl TermView {
         while b < chars.len() && is_word(chars[b]) {
             b += 1;
         }
-        (Pos { line: pos.line, col: a }, Pos { line: pos.line, col: b })
+        (
+            Pos {
+                line: pos.line,
+                col: a,
+            },
+            Pos {
+                line: pos.line,
+                col: b,
+            },
+        )
     }
 
     fn selected_text(&self) -> Option<String> {
@@ -1384,8 +1509,12 @@ fn cell_rect(m: Metrics, col: usize, n: usize, y: f64) -> NSRect {
 
 /// Fonts tried in order when the user hasn't picked one: Nerd Font variants
 /// first, so prompt themes (powerlevel10k etc.) get their icons.
-const PREFERRED_FONTS: &[&str] =
-    &["MesloLGS NF", "MesloLGS Nerd Font Mono", "JetBrainsMono Nerd Font Mono", "Hack Nerd Font Mono"];
+const PREFERRED_FONTS: &[&str] = &[
+    "MesloLGS NF",
+    "MesloLGS Nerd Font Mono",
+    "JetBrainsMono Nerd Font Mono",
+    "Hack Nerd Font Mono",
+];
 
 /// [regular, bold, italic, bold italic]
 fn make_fonts(size: f64) -> [Retained<NSFont>; 4] {
@@ -1409,6 +1538,8 @@ fn measure(font: &NSFont) -> Metrics {
     let attrs: Retained<NSDictionary<NSString, AnyObject>> =
         unsafe { NSDictionary::from_slices(&[NSFontAttributeName], &[font as &AnyObject]) };
     let size = unsafe { NSString::from_str("W").sizeWithAttributes(Some(&attrs)) };
-    Metrics { cw: size.width, ch: size.height.ceil() }
+    Metrics {
+        cw: size.width,
+        ch: size.height.ceil(),
+    }
 }
-

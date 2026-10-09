@@ -5,8 +5,10 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 
+type Action = Box<dyn Fn(Option<&AnyObject>)>;
+
 pub struct Ivars {
-    action: Box<dyn Fn(Option<&AnyObject>)>,
+    action: Action,
 }
 
 define_class!(
@@ -25,7 +27,9 @@ define_class!(
 
 impl Target {
     pub fn new(mtm: MainThreadMarker, action: impl Fn(Option<&AnyObject>) + 'static) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(Ivars { action: Box::new(action) });
+        let this = Self::alloc(mtm).set_ivars(Ivars {
+            action: Box::new(action),
+        });
         unsafe { msg_send![super(this), init] }
     }
 

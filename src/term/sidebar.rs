@@ -9,9 +9,9 @@ use objc2::runtime::AnyObject;
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
 use objc2_app_kit::{
     NSAutoresizingMaskOptions, NSBezierPath, NSButton, NSColor, NSEvent, NSFont, NSFontAttributeName,
-    NSFontWeightSemibold, NSForegroundColorAttributeName, NSImage, NSLineBreakMode, NSMenu, NSMutableParagraphStyle,
-    NSParagraphStyleAttributeName, NSResponder, NSScrollView, NSSearchField, NSStringDrawing, NSView,
-    NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectView,
+    NSFontWeightSemibold, NSForegroundColorAttributeName, NSImage, NSLineBreakMode, NSMenu,
+    NSMutableParagraphStyle, NSParagraphStyleAttributeName, NSResponder, NSScrollView, NSSearchField,
+    NSStringDrawing, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectView,
 };
 use objc2_foundation::{NSDictionary, NSObject, NSPoint, NSRect, NSSize, NSString};
 
@@ -24,8 +24,20 @@ const TOP_BAR: f64 = 40.0;
 
 #[derive(Clone, Debug)]
 pub enum Row {
-    Group { id: Id, name: String, collapsed: bool, count: usize },
-    Tab { id: Id, group: Id, title: String, subtitle: String, active: bool, attention: bool, running: bool },
+    Group {
+        id: Id,
+        name: String,
+        collapsed: bool,
+        count: usize,
+    },
+    Tab {
+        id: Id,
+        title: String,
+        subtitle: String,
+        active: bool,
+        attention: bool,
+        running: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -160,7 +172,9 @@ impl SidebarList {
             drag: Cell::new(None),
             pressed: Cell::new(None),
         });
-        unsafe { msg_send![super(this), initWithFrame: NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(220.0, 100.0))] }
+        unsafe {
+            msg_send![super(this), initWithFrame: NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(220.0, 100.0))]
+        }
     }
 
     fn emit(&self, e: SidebarEvent) {
@@ -210,7 +224,9 @@ impl SidebarList {
         drop(rows);
         *self.ivars().shown.borrow_mut() = shown;
         let parent = unsafe { self.superview() };
-        let width = parent.as_ref().map_or(self.frame().size.width, |s| s.bounds().size.width);
+        let width = parent
+            .as_ref()
+            .map_or(self.frame().size.width, |s| s.bounds().size.width);
         let height = (y + 8.0).max(parent.as_ref().map_or(0.0, |s| s.bounds().size.height));
         self.setFrameSize(NSSize::new(width, height));
         self.setNeedsDisplay(true);
@@ -263,10 +279,25 @@ impl SidebarList {
         let drag = self.ivars().drag.get();
         for (row, top) in shown.iter() {
             match row {
-                Row::Group { name, collapsed, count, .. } => {
+                Row::Group {
+                    name,
+                    collapsed,
+                    count,
+                    ..
+                } => {
                     let chevron = if *collapsed { "▸" } else { "▾" };
-                    draw_text(chevron, NSRect::new(NSPoint::new(10.0, top + 8.0), NSSize::new(12.0, 14.0)), 9.0, false, &NSColor::tertiaryLabelColor());
-                    let label = if *collapsed { format!("{name}  ·  {count}") } else { name.clone() };
+                    draw_text(
+                        chevron,
+                        NSRect::new(NSPoint::new(10.0, top + 8.0), NSSize::new(12.0, 14.0)),
+                        9.0,
+                        false,
+                        &NSColor::tertiaryLabelColor(),
+                    );
+                    let label = if *collapsed {
+                        format!("{name}  ·  {count}")
+                    } else {
+                        name.clone()
+                    };
                     draw_text(
                         &label,
                         NSRect::new(NSPoint::new(24.0, top + 7.0), NSSize::new(width - 34.0, 16.0)),
@@ -275,8 +306,19 @@ impl SidebarList {
                         &NSColor::secondaryLabelColor(),
                     );
                 }
-                Row::Tab { id, title, subtitle, active, attention, running, .. } => {
-                    let card = NSRect::new(NSPoint::new(8.0, top + 2.0), NSSize::new(width - 16.0, TAB_H - 4.0));
+                Row::Tab {
+                    id,
+                    title,
+                    subtitle,
+                    active,
+                    attention,
+                    running,
+                    ..
+                } => {
+                    let card = NSRect::new(
+                        NSPoint::new(8.0, top + 2.0),
+                        NSSize::new(width - 16.0, TAB_H - 4.0),
+                    );
                     let dragged = drag.is_some_and(|d| d.moving && d.tab == *id);
                     if *active || dragged {
                         let fill = if *active {
@@ -301,7 +343,13 @@ impl SidebarList {
                     }
                     let text_x = 32.0;
                     let text_w = width - text_x - 14.0;
-                    draw_text(title, NSRect::new(NSPoint::new(text_x, top + 6.0), NSSize::new(text_w, 17.0)), 13.0, false, &NSColor::labelColor());
+                    draw_text(
+                        title,
+                        NSRect::new(NSPoint::new(text_x, top + 6.0), NSSize::new(text_w, 17.0)),
+                        13.0,
+                        false,
+                        &NSColor::labelColor(),
+                    );
                     draw_text(
                         subtitle,
                         NSRect::new(NSPoint::new(text_x, top + 23.0), NSSize::new(text_w, 15.0)),
@@ -312,16 +360,27 @@ impl SidebarList {
                 }
             }
         }
-        if let Some(Drag { moving: true, drop: Some((_, _, y)), .. }) = drag {
+        if let Some(Drag {
+            moving: true,
+            drop: Some((_, _, y)),
+            ..
+        }) = drag
+        {
             NSColor::controlAccentColor().setFill();
-            NSBezierPath::fillRect(NSRect::new(NSPoint::new(12.0, y - 1.0), NSSize::new(width - 24.0, 2.0)));
+            NSBezierPath::fillRect(NSRect::new(
+                NSPoint::new(12.0, y - 1.0),
+                NSSize::new(width - 24.0, 2.0),
+            ));
         }
     }
 }
 
 /// Index of the group row that owns the tabs ending before `end`.
 fn shown_group_index(rows: &[Row], end: usize) -> usize {
-    (0..end).rev().find(|&i| matches!(rows[i], Row::Group { .. })).unwrap_or(0)
+    (0..end)
+        .rev()
+        .find(|&i| matches!(rows[i], Row::Group { .. }))
+        .unwrap_or(0)
 }
 
 fn row_height(row: &Row) -> f64 {
@@ -341,7 +400,11 @@ fn draw_text(text: &str, rect: NSRect, size: f64, bold: bool, color: &NSColor) {
     para.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
     let attrs: Retained<NSDictionary<NSString, AnyObject>> = unsafe {
         NSDictionary::from_slices(
-            &[NSFontAttributeName, NSForegroundColorAttributeName, NSParagraphStyleAttributeName],
+            &[
+                NSFontAttributeName,
+                NSForegroundColorAttributeName,
+                NSParagraphStyleAttributeName,
+            ],
             &[&*font as &AnyObject, color as &AnyObject, &*para as &AnyObject],
         )
     };
@@ -370,19 +433,29 @@ impl Sidebar {
         scroll.setDrawsBackground(false);
         scroll.setHasVerticalScroller(true);
         scroll.setAutohidesScrollers(true);
-        scroll.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable);
-        list.setFrame(NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(width, height - TOP_BAR)));
+        scroll.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
+        );
+        list.setFrame(NSRect::new(
+            NSPoint::new(0.0, 0.0),
+            NSSize::new(width, height - TOP_BAR),
+        ));
         list.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
         scroll.setDocumentView(Some(&list));
         view.addSubview(&scroll);
 
         let search = NSSearchField::initWithFrame(
             NSSearchField::alloc(mtm),
-            NSRect::new(NSPoint::new(8.0, height - TOP_BAR + 8.0), NSSize::new(width - 46.0, 24.0)),
+            NSRect::new(
+                NSPoint::new(8.0, height - TOP_BAR + 8.0),
+                NSSize::new(width - 46.0, 24.0),
+            ),
         );
         search.setPlaceholderString(Some(&NSString::from_str("Search tabs")));
         search.setSendsSearchStringImmediately(true);
-        search.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewMinYMargin);
+        search.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewMinYMargin,
+        );
         let weak_list = objc2::rc::Weak::from_retained(&list);
         let weak_search = objc2::rc::Weak::from_retained(&search);
         let on_search = Target::new(mtm, move |_| {
@@ -399,7 +472,10 @@ impl Sidebar {
 
         let plus = NSButton::initWithFrame(
             NSButton::alloc(mtm),
-            NSRect::new(NSPoint::new(width - 34.0, height - TOP_BAR + 8.0), NSSize::new(26.0, 24.0)),
+            NSRect::new(
+                NSPoint::new(width - 34.0, height - TOP_BAR + 8.0),
+                NSSize::new(26.0, 24.0),
+            ),
         );
         plus.setBordered(false);
         if let Some(img) = NSImage::imageWithSystemSymbolName_accessibilityDescription(
@@ -411,7 +487,9 @@ impl Sidebar {
             plus.setTitle(&NSString::from_str("+"));
         }
         plus.setToolTip(Some(&NSString::from_str("New tab (⌘T)")));
-        plus.setAutoresizingMask(NSAutoresizingMaskOptions::ViewMinXMargin | NSAutoresizingMaskOptions::ViewMinYMargin);
+        plus.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewMinXMargin | NSAutoresizingMaskOptions::ViewMinYMargin,
+        );
         let weak_list = objc2::rc::Weak::from_retained(&list);
         let on_plus = Target::new(mtm, move |_| {
             if let Some(list) = weak_list.load() {
@@ -424,7 +502,12 @@ impl Sidebar {
         }
         view.addSubview(&plus);
 
-        Sidebar { view, list, search, _targets: vec![on_search, on_plus] }
+        Sidebar {
+            view,
+            list,
+            search,
+            _targets: vec![on_search, on_plus],
+        }
     }
 
     pub fn set_handlers(

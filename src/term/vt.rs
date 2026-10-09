@@ -169,7 +169,11 @@ impl Term {
     }
 
     fn grid_mut(&mut self) -> &mut Grid {
-        if self.alt_active { &mut self.alt } else { &mut self.main }
+        if self.alt_active {
+            &mut self.alt
+        } else {
+            &mut self.main
+        }
     }
 
     pub fn cursor_pos(&self) -> (usize, usize) {
@@ -178,7 +182,11 @@ impl Term {
 
     /// Number of lines addressable: scrollback (main screen only) + screen.
     pub fn total_lines(&self) -> usize {
-        if self.alt_active { self.rows } else { self.history.len() + self.rows }
+        if self.alt_active {
+            self.rows
+        } else {
+            self.history.len() + self.rows
+        }
     }
 
     /// Line by index into `0..total_lines()`.
@@ -197,6 +205,7 @@ impl Term {
         if self.alt_active { 0 } else { self.history.evicted }
     }
 
+    #[cfg_attr(not(feature = "selftest"), allow(dead_code))]
     pub fn screen_text(&self) -> String {
         let mut s = String::new();
         for line in &self.grid().lines {
@@ -209,8 +218,14 @@ impl Term {
     }
 
     /// Bytes held by this terminal's grids, scrollback and tables.
+    #[cfg_attr(not(feature = "selftest"), allow(dead_code))]
     pub fn mem_bytes(&self) -> usize {
-        self.main.bytes() + self.alt.bytes() + self.history.bytes() + self.clusters.bytes() + self.styles.len() * 24 + self.links.iter().map(|l| l.len() * 2 + 48).sum::<usize>()
+        self.main.bytes()
+            + self.alt.bytes()
+            + self.history.bytes()
+            + self.clusters.bytes()
+            + self.styles.len() * 24
+            + self.links.iter().map(|l| l.len() * 2 + 48).sum::<usize>()
     }
 
     /// Target of an OSC 8 hyperlink id (see `Style::link`).
@@ -253,7 +268,11 @@ impl Term {
         // Main screen: shrink by dropping blank rows below the cursor first,
         // then pushing top rows into scrollback; grow by pulling them back.
         let alt = self.alt_active;
-        let mut crow = if alt { self.saved_main.cursor.row } else { self.cursor.row };
+        let mut crow = if alt {
+            self.saved_main.cursor.row
+        } else {
+            self.cursor.row
+        };
         while self.main.lines.len() > rows {
             let last = self.main.lines.len() - 1;
             if last > crow && self.main.lines[last].cells.iter().all(Cell::is_blank) {
@@ -315,7 +334,10 @@ impl Term {
         if pen.bg == Color::Default {
             Cell::BLANK
         } else {
-            Cell::blank(self.styles.intern(Style { bg: pen.bg, ..Style::default() }))
+            Cell::blank(self.styles.intern(Style {
+                bg: pen.bg,
+                ..Style::default()
+            }))
         }
     }
 
@@ -374,7 +396,11 @@ impl Term {
     }
 
     fn goto(&mut self, row: usize, col: usize) {
-        let (min, max) = if self.modes.origin { (self.top, self.bottom) } else { (0, self.rows - 1) };
+        let (min, max) = if self.modes.origin {
+            (self.top, self.bottom)
+        } else {
+            (0, self.rows - 1)
+        };
         self.cursor.row = (row + if self.modes.origin { self.top } else { 0 }).clamp(min, max);
         self.cursor.col = col.min(self.cols - 1);
         self.cursor.pending_wrap = false;
@@ -404,7 +430,11 @@ impl Term {
 
     fn print_char(&mut self, c: char) {
         let c = if self.dec_graphics { dec_special(c) } else { c };
-        let width = if (c as u32) < 0x7f { 1 } else { c.width().unwrap_or(0) };
+        let width = if (c as u32) < 0x7f {
+            1
+        } else {
+            c.width().unwrap_or(0)
+        };
         // Skin tones and the parts of a ZWJ sequence belong to the emoji before.
         let joins = std::mem::take(&mut self.join_next) || is_emoji_modifier(c);
         if width == 0 || (joins && self.last_char.is_some()) {
@@ -440,10 +470,22 @@ impl Term {
         let style = self.styles.intern(self.cursor.pen);
         let line = &mut self.grid_mut().lines[row];
         if width == 2 {
-            line.cells[col] = Cell { ch: c as u32, style, flags: flag::WIDE };
-            line.cells[col + 1] = Cell { ch: ' ' as u32, style, flags: flag::SPACER };
+            line.cells[col] = Cell {
+                ch: c as u32,
+                style,
+                flags: flag::WIDE,
+            };
+            line.cells[col + 1] = Cell {
+                ch: ' ' as u32,
+                style,
+                flags: flag::SPACER,
+            };
         } else {
-            line.cells[col] = Cell { ch: c as u32, style, flags: 0 };
+            line.cells[col] = Cell {
+                ch: c as u32,
+                style,
+                flags: 0,
+            };
         }
         self.touch(row);
         self.last_char = Some(c);
@@ -484,7 +526,11 @@ impl Term {
     }
 
     fn save_cursor(&mut self) {
-        let saved = Saved { cursor: self.cursor, origin: self.modes.origin, dec_graphics: self.dec_graphics };
+        let saved = Saved {
+            cursor: self.cursor,
+            origin: self.modes.origin,
+            dec_graphics: self.dec_graphics,
+        };
         if self.alt_active {
             self.saved_alt = saved;
         } else {
@@ -493,7 +539,11 @@ impl Term {
     }
 
     fn restore_cursor(&mut self) {
-        let saved = if self.alt_active { self.saved_alt } else { self.saved_main };
+        let saved = if self.alt_active {
+            self.saved_alt
+        } else {
+            self.saved_main
+        };
         self.cursor = saved.cursor;
         self.cursor.row = self.cursor.row.min(self.rows - 1);
         self.cursor.col = self.cursor.col.min(self.cols - 1);
@@ -659,7 +709,13 @@ impl Term {
                         let mut v = Vec::new();
                         if let Some(kind) = it.next() {
                             v.push(kind[0]);
-                            let n = if kind[0] == 5 { 1 } else if kind[0] == 2 { 3 } else { 0 };
+                            let n = if kind[0] == 5 {
+                                1
+                            } else if kind[0] == 2 {
+                                3
+                            } else {
+                                0
+                            };
                             for _ in 0..n {
                                 if let Some(x) = it.next() {
                                     v.push(x[0]);
@@ -767,7 +823,11 @@ impl Perform for Term {
                 self.cursor.pending_wrap = false;
             }
             ([], 'B') | ([], 'e') => {
-                let max = if row <= self.bottom { self.bottom } else { self.rows - 1 };
+                let max = if row <= self.bottom {
+                    self.bottom
+                } else {
+                    self.rows - 1
+                };
                 self.cursor.row = (row + arg(0, 1)).min(max);
                 self.cursor.pending_wrap = false;
             }
@@ -780,7 +840,11 @@ impl Perform for Term {
                 self.cursor.pending_wrap = false;
             }
             ([], 'E') => {
-                let max = if row <= self.bottom { self.bottom } else { self.rows - 1 };
+                let max = if row <= self.bottom {
+                    self.bottom
+                } else {
+                    self.rows - 1
+                };
                 self.cursor.row = (row + arg(0, 1)).min(max);
                 self.cursor.col = 0;
                 self.cursor.pending_wrap = false;
@@ -963,7 +1027,14 @@ impl Perform for Term {
             ([b'#'], b'8') => {
                 let cols = self.cols;
                 for line in &mut self.grid_mut().lines {
-                    line.reset(cols, Cell { ch: 'E' as u32, style: 0, flags: 0 });
+                    line.reset(
+                        cols,
+                        Cell {
+                            ch: 'E' as u32,
+                            style: 0,
+                            flags: 0,
+                        },
+                    );
                 }
                 self.all_dirty = true;
                 self.dirty.fill(true);
@@ -989,11 +1060,20 @@ impl Perform for Term {
 
     fn osc_dispatch(&mut self, params: &[&[u8]], bell: bool) {
         let Some(&first) = params.first() else { return };
-        let text = |i: usize| params.get(i).map(|p| String::from_utf8_lossy(p).into_owned()).unwrap_or_default();
+        let text = |i: usize| {
+            params
+                .get(i)
+                .map(|p| String::from_utf8_lossy(p).into_owned())
+                .unwrap_or_default()
+        };
         match first {
             b"0" | b"2" => {
                 // Titles may contain ';', which vte splits on.
-                let title = params[1..].iter().map(|p| String::from_utf8_lossy(p)).collect::<Vec<_>>().join(";");
+                let title = params[1..]
+                    .iter()
+                    .map(|p| String::from_utf8_lossy(p))
+                    .collect::<Vec<_>>()
+                    .join(";");
                 if title != self.title {
                     self.title = title.clone();
                     self.events.push(Event::Title(title));
@@ -1001,7 +1081,9 @@ impl Perform for Term {
             }
             b"7" => {
                 let url = text(1);
-                let path = url.strip_prefix("file://").map(|rest| rest.find('/').map_or("", |i| &rest[i..]));
+                let path = url
+                    .strip_prefix("file://")
+                    .map(|rest| rest.find('/').map_or("", |i| &rest[i..]));
                 if let Some(path) = path {
                     self.events.push(Event::Cwd(percent_decode(path)));
                 }
@@ -1009,21 +1091,32 @@ impl Perform for Term {
             // OSC 9;4 is a progress report, not a notification.
             b"9" if params.get(1).is_some_and(|p| *p != b"4") => self.events.push(Event::Notify(text(1))),
             b"777" if params.get(1) == Some(&&b"notify"[..]) => {
-                let msg = [text(2), text(3)].iter().filter(|s| !s.is_empty()).cloned().collect::<Vec<_>>().join(": ");
+                let msg = [text(2), text(3)]
+                    .iter()
+                    .filter(|s| !s.is_empty())
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(": ");
                 self.events.push(Event::Notify(msg));
             }
             b"10" if params.get(1) == Some(&&b"?"[..]) => self.osc_color_reply(10, self.report_fg, bell),
             b"11" if params.get(1) == Some(&&b"?"[..]) => self.osc_color_reply(11, self.report_bg, bell),
             b"8" => {
                 // The URI may contain ';', which vte splits on.
-                let uri = params.get(2..).map(|p| p.iter().map(|p| String::from_utf8_lossy(p)).collect::<Vec<_>>().join(";"));
+                let uri = params.get(2..).map(|p| {
+                    p.iter()
+                        .map(|p| String::from_utf8_lossy(p))
+                        .collect::<Vec<_>>()
+                        .join(";")
+                });
                 self.cursor.pen.link = uri.filter(|u| !u.is_empty()).map_or(0, |u| self.intern_link(&u));
             }
             b"52" => {
                 if let Some(data) = params.get(2).filter(|d| **d != b"?")
                     && let Some(bytes) = base64_decode(data)
                 {
-                    self.events.push(Event::Clipboard(String::from_utf8_lossy(&bytes).into_owned()));
+                    self.events
+                        .push(Event::Clipboard(String::from_utf8_lossy(&bytes).into_owned()));
                 }
             }
             _ => {}
@@ -1144,7 +1237,10 @@ mod tests {
     #[test]
     fn osc8_links_style_cells() {
         let mut t = Term::new(20, 2);
-        run(&mut t, b"a\x1b]8;id=1;https://x.io/a;b\x1b\\bc\x1b[1m\x1b[0md\x1b]8;;\x1b\\e");
+        run(
+            &mut t,
+            b"a\x1b]8;id=1;https://x.io/a;b\x1b\\bc\x1b[1m\x1b[0md\x1b]8;;\x1b\\e",
+        );
         let id = |c: usize| t.styles.get(t.grid().lines[0].cells[c].style).link;
         assert_eq!(id(0), 0);
         assert_ne!(id(1), 0);
@@ -1227,7 +1323,10 @@ mod tests {
     #[test]
     fn sgr_styles_are_interned() {
         let mut t = Term::new(20, 1);
-        run(&mut t, b"\x1b[1;31mred\x1b[0m \x1b[38;2;1;2;3mrgb\x1b[38:5:200mx\x1b[1;31my");
+        run(
+            &mut t,
+            b"\x1b[1;31mred\x1b[0m \x1b[38;2;1;2;3mrgb\x1b[38:5:200mx\x1b[1;31my",
+        );
         let l = &t.grid().lines[0];
         let red = t.styles.get(l.cells[0].style);
         assert_eq!(red.fg, Color::Indexed(1));
@@ -1268,10 +1367,17 @@ mod tests {
     #[test]
     fn osc_title_cwd_notify() {
         let mut t = Term::new(10, 2);
-        run(&mut t, b"\x1b]0;a;b\x07\x1b]7;file://mac/Users/x/My%20Dir\x1b\\\x1b]9;done\x07\x1b]9;4;1;50\x07");
+        run(
+            &mut t,
+            b"\x1b]0;a;b\x07\x1b]7;file://mac/Users/x/My%20Dir\x1b\\\x1b]9;done\x07\x1b]9;4;1;50\x07",
+        );
         assert_eq!(
             t.events,
-            [Event::Title("a;b".into()), Event::Cwd("/Users/x/My Dir".into()), Event::Notify("done".into())]
+            [
+                Event::Title("a;b".into()),
+                Event::Cwd("/Users/x/My Dir".into()),
+                Event::Notify("done".into())
+            ]
         );
     }
 

@@ -53,10 +53,18 @@ pub struct Cell {
 const _: () = assert!(size_of::<Cell>() == 8);
 
 impl Cell {
-    pub const BLANK: Cell = Cell { ch: ' ' as u32, style: 0, flags: 0 };
+    pub const BLANK: Cell = Cell {
+        ch: ' ' as u32,
+        style: 0,
+        flags: 0,
+    };
 
     pub fn blank(style: u16) -> Cell {
-        Cell { ch: ' ' as u32, style, flags: 0 }
+        Cell {
+            ch: ' ' as u32,
+            style,
+            flags: 0,
+        }
     }
 
     pub fn is_blank(&self) -> bool {
@@ -73,13 +81,23 @@ pub struct Line {
 
 impl Line {
     pub fn new(cols: usize, fill: Cell) -> Line {
-        Line { cells: vec![fill; cols], wrapped: false }
+        Line {
+            cells: vec![fill; cols],
+            wrapped: false,
+        }
     }
 
     /// A copy without trailing default blanks, sized exactly, for scrollback.
     pub fn trimmed(&self) -> Line {
-        let end = self.cells.iter().rposition(|c| !c.is_blank()).map_or(0, |i| i + 1);
-        Line { cells: self.cells[..end].to_vec(), wrapped: self.wrapped }
+        let end = self
+            .cells
+            .iter()
+            .rposition(|c| !c.is_blank())
+            .map_or(0, |i| i + 1);
+        Line {
+            cells: self.cells[..end].to_vec(),
+            wrapped: self.wrapped,
+        }
     }
 
     pub fn reset(&mut self, cols: usize, fill: Cell) {
@@ -103,7 +121,10 @@ impl Default for Styles {
     fn default() -> Self {
         let mut map = HashMap::new();
         map.insert(Style::default(), 0);
-        Styles { list: vec![Style::default()], map }
+        Styles {
+            list: vec![Style::default()],
+            map,
+        }
     }
 }
 
@@ -170,7 +191,13 @@ pub struct History {
 
 impl History {
     pub fn new(max_lines: usize, max_bytes: usize) -> History {
-        History { lines: VecDeque::new(), bytes: 0, max_lines, max_bytes, evicted: 0 }
+        History {
+            lines: VecDeque::new(),
+            bytes: 0,
+            max_lines,
+            max_bytes,
+            evicted: 0,
+        }
     }
 
     pub fn push(&mut self, line: Line) {
@@ -216,7 +243,9 @@ pub struct Grid {
 
 impl Grid {
     pub fn new(cols: usize, rows: usize) -> Grid {
-        Grid { lines: (0..rows).map(|_| Line::new(cols, Cell::BLANK)).collect() }
+        Grid {
+            lines: (0..rows).map(|_| Line::new(cols, Cell::BLANK)).collect(),
+        }
     }
 
     pub fn bytes(&self) -> usize {

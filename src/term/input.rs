@@ -63,7 +63,13 @@ pub fn encode_key(chars: &str, bare: &str, mods: Mods, app_cursor: bool) -> Opti
             csi(&c.to_string())
         }
     };
-    let tilde = |n: u8| if m > 1 { csi(&format!("{n};{m}~")) } else { csi(&format!("{n}~")) };
+    let tilde = |n: u8| {
+        if m > 1 {
+            csi(&format!("{n};{m}~"))
+        } else {
+            csi(&format!("{n}~"))
+        }
+    };
 
     match key {
         UP => return arrow('A'),
@@ -80,20 +86,34 @@ pub fn encode_key(chars: &str, bare: &str, mods: Mods, app_cursor: bool) -> Opti
             let n = key - F1;
             if n < 4 {
                 let c = (b'P' + n as u8) as char;
-                return if m > 1 { csi(&format!("1;{m}{c}")) } else { Some(format!("\x1bO{c}").into_bytes()) };
+                return if m > 1 {
+                    csi(&format!("1;{m}{c}"))
+                } else {
+                    Some(format!("\x1bO{c}").into_bytes())
+                };
             }
             return tilde([15, 17, 18, 19, 20, 21, 23, 24][n as usize - 4]);
         }
-        0xF700..=0xF8FF => return None,
+        k if (0xF700..=0xF8FF).contains(&k) => return None,
         _ => {}
     }
 
     match key {
         // Return: Shift/Option insert a newline in Claude Code and friends.
         0x0d | 0x03 => {
-            return Some(if mods.shift || mods.alt { b"\x1b\r".to_vec() } else { b"\r".to_vec() });
+            return Some(if mods.shift || mods.alt {
+                b"\x1b\r".to_vec()
+            } else {
+                b"\r".to_vec()
+            });
         }
-        0x09 => return Some(if mods.shift { b"\x1b[Z".to_vec() } else { b"\t".to_vec() }),
+        0x09 => {
+            return Some(if mods.shift {
+                b"\x1b[Z".to_vec()
+            } else {
+                b"\t".to_vec()
+            });
+        }
         0x19 => return Some(b"\x1b[Z".to_vec()),
         0x7f => {
             return Some(if mods.alt {
@@ -130,7 +150,11 @@ pub fn encode_key(chars: &str, bare: &str, mods: Mods, app_cursor: bool) -> Opti
 
     if mods.alt {
         // Meta: ESC + the unmodified key (shifted if Shift is held).
-        let base: String = if mods.shift { bare.to_uppercase() } else { bare.to_string() };
+        let base: String = if mods.shift {
+            bare.to_uppercase()
+        } else {
+            bare.to_string()
+        };
         let mut v = vec![0x1b];
         v.extend_from_slice(base.as_bytes());
         return Some(v);
@@ -155,7 +179,13 @@ pub fn encode_paste(text: &str, bracketed: bool) -> Vec<u8> {
 /// SGR mouse report (1006). `button`: 0 left, 1 middle, 2 right, 64/65 wheel.
 pub fn encode_mouse_sgr(button: u8, col: usize, row: usize, press: bool, mods: Mods) -> Vec<u8> {
     let b = button as usize + 4 * mods.shift as usize + 8 * mods.alt as usize + 16 * mods.ctrl as usize;
-    format!("\x1b[<{b};{};{}{}", col + 1, row + 1, if press { 'M' } else { 'm' }).into_bytes()
+    format!(
+        "\x1b[<{b};{};{}{}",
+        col + 1,
+        row + 1,
+        if press { 'M' } else { 'm' }
+    )
+    .into_bytes()
 }
 
 #[cfg(test)]
@@ -166,7 +196,12 @@ mod tests {
         encode_key(chars, bare, mods, false).unwrap_or_default()
     }
 
-    const NONE: Mods = Mods { shift: false, ctrl: false, alt: false, cmd: false };
+    const NONE: Mods = Mods {
+        shift: false,
+        ctrl: false,
+        alt: false,
+        cmd: false,
+    };
     const SHIFT: Mods = Mods { shift: true, ..NONE };
     const CTRL: Mods = Mods { ctrl: true, ..NONE };
     const ALT: Mods = Mods { alt: true, ..NONE };

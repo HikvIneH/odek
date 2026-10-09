@@ -10,7 +10,9 @@ use objc2_app_kit::{
     NSBezierPath, NSColor, NSEvent, NSEventModifierFlags, NSFont, NSFontAttributeName,
     NSForegroundColorAttributeName, NSStringDrawing, NSUnderlineStyleAttributeName,
 };
-use objc2_foundation::{NSAttributedString, NSDictionary, NSNumber, NSPoint, NSRange, NSRect, NSSize, NSString};
+use objc2_foundation::{
+    NSAttributedString, NSDictionary, NSNumber, NSPoint, NSRange, NSRect, NSSize, NSString,
+};
 use unicode_width::UnicodeWidthChar;
 
 pub const NOT_FOUND: usize = isize::MAX as usize;
@@ -100,7 +102,9 @@ pub fn wants(chars: &str, flags: NSEventModifierFlags, composing: bool) -> bool 
 pub fn string_of(obj: &AnyObject) -> String {
     match obj.downcast_ref::<NSAttributedString>() {
         Some(a) => a.string().to_string(),
-        None => obj.downcast_ref::<NSString>().map_or_else(String::new, |s| s.to_string()),
+        None => obj
+            .downcast_ref::<NSString>()
+            .map_or_else(String::new, |s| s.to_string()),
     }
 }
 
@@ -135,7 +139,11 @@ pub fn draw_marked(
     let one = NSNumber::new_i32(1);
     let attrs: Retained<NSDictionary<NSString, AnyObject>> = unsafe {
         NSDictionary::from_slices(
-            &[NSFontAttributeName, NSForegroundColorAttributeName, NSUnderlineStyleAttributeName],
+            &[
+                NSFontAttributeName,
+                NSForegroundColorAttributeName,
+                NSUnderlineStyleAttributeName,
+            ],
             &[font as &AnyObject, fg as &AnyObject, &*one as &AnyObject],
         )
     };

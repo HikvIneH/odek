@@ -227,17 +227,25 @@ define_class!(
             self.with_bench(|b| b.quick_open_here());
         }
 
-        // ⌘O. Reaches here when a terminal has focus; the code viewer
-        // answers it itself (opening a folder in the viewer).
+        /// ⌘O is one menu item: here (a terminal has focus) it's New Tab in
+        /// Folder; the code viewer answers it as Open Folder and renames it.
+        #[unsafe(method(validateMenuItem:))]
+        fn validate_menu_item(&self, item: &NSMenuItem) -> bool {
+            if item.action() == Some(sel!(appOpenFolder:)) {
+                item.setTitle(&NSString::from_str("New Tab in Folder…"));
+            }
+            true
+        }
+
         #[unsafe(method(appOpenFolder:))]
         fn menu_open(&self, _sender: Option<&AnyObject>) {
             let panel = objc2_app_kit::NSOpenPanel::openPanel(self.mtm());
             panel.setCanChooseDirectories(true);
             panel.setCanChooseFiles(true);
             panel.setAllowsMultipleSelection(true);
-            panel.setPrompt(Some(&NSString::from_str("Open")));
+            panel.setPrompt(Some(&NSString::from_str("New Tab")));
             panel.setMessage(Some(&NSString::from_str(
-                "A folder opens as a new tab; a file opens in the code viewer.",
+                "Opens a new terminal tab in the folder. A file opens in the code viewer.",
             )));
             if panel.runModal() == objc2_app_kit::NSModalResponseOK {
                 for url in panel.URLs().iter() {
@@ -514,6 +522,7 @@ impl TermApp {
                 "Shell",
                 vec![
                     item("New Tab", Some(sel!(termNewTab:)), "t", cmd),
+                    item("New Tab in Folder…", Some(sel!(appOpenFolder:)), "o", cmd),
                     item("New Group…", Some(sel!(termNewGroup:)), "n", cmd | shift),
                     sep(),
                     item("Split Right", Some(sel!(termSplitRight:)), "d", cmd),
@@ -528,7 +537,6 @@ impl TermApp {
             menu(
                 "File",
                 vec![
-                    item("Open…", Some(sel!(appOpenFolder:)), "o", cmd),
                     item("Quick Open…", Some(sel!(appQuickOpen:)), "p", cmd),
                     item("Show Files", Some(sel!(termShowFiles:)), "e", cmd | shift),
                     sep(),

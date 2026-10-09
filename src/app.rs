@@ -529,6 +529,10 @@ define_class!(
             if item.action() == Some(sel!(appToggleComment:)) {
                 item.setTitle(ns_string!("Toggle Line Comment"));
             }
+            // A terminal calls ⌘O New Tab in Folder; here it opens a folder.
+            if item.action() == Some(sel!(appOpenFolder:)) {
+                item.setTitle(ns_string!("Open Folder…"));
+            }
             true
         }
 

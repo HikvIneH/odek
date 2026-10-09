@@ -8,6 +8,7 @@ mod ime;
 pub mod input;
 pub mod links;
 pub mod session;
+mod settings;
 mod sidebar;
 mod target;
 pub mod view;

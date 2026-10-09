@@ -31,6 +31,7 @@ use super::ime::{self, Ime};
 use super::input::{self, Mods};
 use super::links::{self, Target};
 use super::session::{Session, Spawn};
+use super::settings::{self, ThemePref};
 use super::vt::{CursorShape, Event, MouseMode, Term};
 
 const PAD_X: f64 = 10.0;
@@ -413,7 +414,7 @@ enum MouseKind {
 
 impl TermView {
     pub fn new(frame: NSRect, mtm: MainThreadMarker) -> Retained<Self> {
-        let size = DEFAULT_FONT_SIZE;
+        let size = settings::font_size();
         let fonts = make_fonts(size);
         let metrics = measure(&fonts[0]);
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
@@ -494,6 +495,7 @@ impl TermView {
             let theme = self.theme();
             t.report_fg = rgb_tuple(theme.fg);
             t.report_bg = rgb_tuple(theme.bg);
+            settings::apply_scrollback(&mut t);
         }
         *self.ivars().session.borrow_mut() = Some(session);
         self.setNeedsDisplay(true);
@@ -543,6 +545,24 @@ impl TermView {
         self.ivars().attrs.borrow_mut().clear();
         self.fit_grid();
         self.setNeedsDisplay(true);
+    }
+
+    /// Every live terminal.
+    pub fn all() -> Vec<Retained<TermView>> {
+        VIEWS.with(|v| v.borrow().values().filter_map(Weak::load).collect())
+    }
+
+    /// Re-read the saved font, size, theme and scrollback.
+    pub fn apply_settings(&self) {
+        self.update_theme();
+        self.set_font_size(settings::font_size());
+        self.with_term_mut(settings::apply_scrollback);
+    }
+
+    fn with_term_mut(&self, f: impl FnOnce(&mut Term)) {
+        if let Some(s) = self.ivars().session.borrow().as_ref() {
+            f(&mut s.term.lock().unwrap());
+        }
     }
 
     pub fn font_size(&self) -> f64 {
@@ -604,10 +624,14 @@ impl TermView {
 
     fn update_theme(&self) {
         let names = unsafe { NSArray::from_slice(&[NSAppearanceNameAqua, NSAppearanceNameDarkAqua]) };
-        let dark = self
-            .effectiveAppearance()
-            .bestMatchFromAppearancesWithNames(&names)
-            .is_some_and(|n| n.isEqualToString(unsafe { NSAppearanceNameDarkAqua }));
+        let dark = match settings::theme() {
+            ThemePref::Light => false,
+            ThemePref::Dark => true,
+            ThemePref::System => self
+                .effectiveAppearance()
+                .bestMatchFromAppearancesWithNames(&names)
+                .is_some_and(|n| n.isEqualToString(unsafe { NSAppearanceNameDarkAqua })),
+        };
         self.ivars().dark.set(dark);
         self.ivars().attrs.borrow_mut().clear();
         if let Some(s) = self.ivars().session.borrow().as_ref() {
@@ -972,8 +996,12 @@ impl TermView {
     fn handle_key(&self, event: &NSEvent) {
         let ime = &self.ivars().ime;
         let chars = event.characters().map(|s| s.to_string()).unwrap_or_default();
-        if ime::wants(&chars, event.modifierFlags(), ime.has_marked())
-            && let Some(ctx) = self.inputContext()
+        if ime::wants(
+            &chars,
+            event.modifierFlags(),
+            ime.has_marked(),
+            settings::option_as_meta(),
+        ) && let Some(ctx) = self.inputContext()
         {
             ime.begin(event);
             let handled = ctx.handleEvent(event);
@@ -1528,13 +1556,24 @@ fn make_fonts(size: f64) -> [Retained<NSFont>; 4] {
     let chosen = NSUserDefaults::standardUserDefaults()
         .stringForKey(&NSString::from_str("terminalFont"))
         .map(|s| s.to_string());
+    let fm = NSFontManager::sharedFontManager(MainThreadMarker::new().expect("main thread"));
+    // The settings window stores family names; fontWithName wants a face name.
+    let by_family = |name: &str| {
+        fm.fontWithFamily_traits_weight_size(&NSString::from_str(name), NSFontTraitMask::empty(), 5, size)
+    };
     let regular = chosen
         .iter()
         .map(String::as_str)
-        .chain(PREFERRED_FONTS.iter().copied())
-        .find_map(|name| NSFont::fontWithName_size(&NSString::from_str(name), size))
+        .filter(|n| !n.is_empty())
+        .find_map(|name| {
+            NSFont::fontWithName_size(&NSString::from_str(name), size).or_else(|| by_family(name))
+        })
+        .or_else(|| {
+            PREFERRED_FONTS
+                .iter()
+                .find_map(|name| NSFont::fontWithName_size(&NSString::from_str(name), size))
+        })
         .unwrap_or_else(|| NSFont::monospacedSystemFontOfSize_weight(size, unsafe { NSFontWeightRegular }));
-    let fm = NSFontManager::sharedFontManager(MainThreadMarker::new().expect("main thread"));
     let bold = fm.convertFont_toHaveTrait(&regular, NSFontTraitMask::BoldFontMask);
     let italic = fm.convertFont_toHaveTrait(&regular, NSFontTraitMask::ItalicFontMask);
     let bold_italic = fm.convertFont_toHaveTrait(&bold, NSFontTraitMask::ItalicFontMask);

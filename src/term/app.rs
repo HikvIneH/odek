@@ -138,6 +138,11 @@ define_class!(
     }
 
     impl TermApp {
+        #[unsafe(method(termSettings:))]
+        fn menu_settings(&self, _sender: Option<&AnyObject>) {
+            super::settings::show(self.mtm());
+        }
+
         #[unsafe(method(termNewTab:))]
         fn menu_new_tab(&self, _sender: Option<&AnyObject>) {
             self.with_bench(|b| b.new_tab());
@@ -250,7 +255,7 @@ define_class!(
         #[unsafe(method(termZoomReset:))]
         fn menu_zoom_reset(&self, _sender: Option<&AnyObject>) {
             if let Some(v) = self.key_view() {
-                v.set_font_size(super::view::DEFAULT_FONT_SIZE);
+                v.set_font_size(super::settings::font_size());
             }
         }
     }
@@ -449,6 +454,8 @@ impl TermApp {
                         "",
                         cmd,
                     ),
+                    sep(),
+                    item("Settings…", Some(sel!(termSettings:)), ",", cmd),
                     sep(),
                     item(&format!("Hide {APP_NAME}"), Some(sel!(hide:)), "h", cmd),
                     item("Hide Others", Some(sel!(hideOtherApplications:)), "h", cmd | opt),
@@ -665,6 +672,10 @@ mod snap {
         next();
     }
 
+    fn app_mtm() -> objc2::MainThreadMarker {
+        objc2::MainThreadMarker::new().unwrap()
+    }
+
     fn after(secs: f64) {
         let when = DispatchTime::try_from(Duration::from_secs_f64(secs)).unwrap();
         let _ = DispatchQueue::main().after(when, next);
@@ -770,6 +781,16 @@ mod snap {
                     footprint_mb(),
                     view.mem_bytes() as f64 / 1048576.0
                 );
+            }
+            "settings" => super::super::settings::show(app_mtm()),
+            "setting" => {
+                let (name, value) = arg.split_once(' ').unwrap_or((arg, ""));
+                super::super::settings::set_raw(name, value);
+            }
+            "snapwin" => {
+                if let Some(content) = super::super::settings::content_view() {
+                    snapshot(&content, &out.join(format!("{arg}.png")));
+                }
             }
             "find" => super::super::findbar::open_with(&view, arg),
             "findnext" => super::super::findbar::step(&view, 1),

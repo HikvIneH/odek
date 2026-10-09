@@ -2,7 +2,7 @@
   <img src="assets/odek-lockup.png" width="420" alt="odek">
 </p>
 <p align="center">A tiny, native terminal for macOS, made for running coding agents side by side.<br>
-Grouped tabs, split panes and a built-in code viewer, in about a fifth of Warp's memory.</p>
+Grouped tabs, split panes and a built-in code viewer, native and light on memory.</p>
 
 <p align="center">
   <a href="https://github.com/HikvIneH/odek/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/HikvIneH/odek/actions/workflows/ci.yml/badge.svg"></a>
@@ -19,10 +19,9 @@ Grouped tabs, split panes and a built-in code viewer, in about a fifth of Warp's
 ## Why
 
 A working day can mean several coding agents running at once, each in its own
-terminal, with a quick look at the code now and then. Terminals that draw with
-their own GPU renderer and ship AI and cloud features tend to sit at several
-hundred megabytes and grow into gigabytes after a long session. On an 8 GB
-laptop that is memory your builds and browsers need.
+terminal, with a quick look at the code now and then. That calls for a
+terminal that keeps them organised and stays out of the way, including on an
+8 GB laptop where memory is needed for builds and browsers.
 
 odek does the everyday job with what macOS already has. AppKit and Core Text
 draw every character, so there is no renderer, font engine or UI toolkit of its
@@ -74,19 +73,17 @@ Measured on an M1 Mac with 8 GB, macOS 26, a zsh with powerlevel10k. Memory is
 the process footprint, the number Activity Monitor shows.
 
 **What Activity Monitor shows** includes the window's drawing buffers, which
-macOS keeps for any app with a window on screen and which grow with the window:
-
-| One shell, idle, on screen | |
-|---|---|
-| odek, window maximized on a 2560×1600 display | ~107 MB (68 MB of it window buffers) |
-| Warp, fresh start, one tab, default window | ~233 MB (48 MB of it window buffers) |
+macOS keeps for any app with a window on screen and which grow with the window.
+For one idle shell in a window maximized on a 2560×1600 display it's about
+107 MB, 68 MB of it window buffers; while a lot of output is being drawn it can
+rise to around 200–250 MB for a moment and then falls back.
 
 **odek's own memory**, without window buffers (measured with the window off
 screen, so it doesn't depend on window size):
 
 | | |
 |---|---|
-| One shell, idle | ~38 MB (Warp: ~185 MB) |
+| One shell, idle | ~38 MB |
 | Two tabs, three panes | ~39 MB |
 | A file open in the code viewer beside a terminal | ~52 MB |
 | Six panes, each with a full scrollback | ~70 MB (91 MB peak while all six printed at once) |

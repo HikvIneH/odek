@@ -131,6 +131,9 @@ pub struct Term {
     pub in_prompt: bool,
     /// The shell sends prompt marks, so `prompts` and `in_prompt` are known.
     pub shell_marks: bool,
+    /// Stable ids of marked lines (a Return press, or a shell prompt start),
+    /// oldest first: what Clear to Previous Mark and mark jumps work on.
+    pub marks: std::collections::VecDeque<u64>,
     /// The last resize reflowed the main screen: line ids changed, so the
     /// view should drop its scroll anchor. Cleared by the view.
     pub reflowed: bool,
@@ -172,6 +175,7 @@ impl Term {
             prompts: std::collections::VecDeque::new(),
             in_prompt: false,
             shell_marks: false,
+            marks: std::collections::VecDeque::new(),
         }
     }
 
@@ -279,10 +283,12 @@ impl Term {
             // Old marks pointed at lines that moved; keep the live prompt's.
             let base = self.history.evicted + self.history.len() as u64;
             self.prompts.clear();
+            self.marks.clear();
             if let Some(r) = prompt_row
                 && self.in_prompt
             {
                 self.prompts.push_back(base + r as u64);
+                self.marks.push_back(base + r as u64);
             }
         }
         for grid in [&mut self.main, &mut self.alt] {
@@ -371,6 +377,139 @@ impl Term {
     /// Stable id of the cursor's line on the main screen.
     fn cursor_line_id(&self) -> u64 {
         self.history.evicted + self.history.len() as u64 + self.cursor.row as u64
+    }
+
+    fn add_mark(&mut self, id: u64) {
+        while self.marks.front().is_some_and(|&m| m < self.history.evicted) {
+            self.marks.pop_front();
+        }
+        while self.marks.back().is_some_and(|&m| m > id) {
+            self.marks.pop_back();
+        }
+        if self.marks.back() != Some(&id) {
+            self.marks.push_back(id);
+            if self.marks.len() > 2000 {
+                self.marks.pop_front();
+            }
+        }
+    }
+
+    /// Return was pressed: mark the cursor's line, like Terminal.app. Shells
+    /// that send prompt marks supply better ones.
+    pub fn mark_return(&mut self) {
+        if !self.alt_active && !self.shell_marks {
+            self.add_mark(self.cursor_line_id());
+        }
+    }
+
+    /// Nearest mark above (`dir < 0`) or below (`dir > 0`) line id `from`.
+    pub fn mark_from(&self, from: u64, dir: i32) -> Option<u64> {
+        let mut marks = self.marks.iter().copied().filter(|&m| m >= self.history.evicted);
+        if dir < 0 {
+            marks.rfind(|&m| m < from)
+        } else {
+            marks.find(|&m| m > from)
+        }
+    }
+
+    /// Where the current prompt starts: the line Clear to Previous Mark stops at.
+    fn prompt_start_id(&self) -> u64 {
+        match self.prompts.back() {
+            Some(&id) if self.shell_marks && self.in_prompt => id.min(self.cursor_line_id()),
+            _ => self.cursor_line_id(),
+        }
+    }
+
+    /// Remove the lines from the latest mark before the current prompt up to
+    /// the prompt, so the last command and its output vanish. False if there
+    /// is nothing to clear (alt screen, no mark).
+    pub fn clear_to_mark(&mut self) -> bool {
+        if self.alt_active {
+            return false;
+        }
+        let end = self.prompt_start_id();
+        let first = self.history.evicted;
+        let Some(&start) = self.marks.iter().rev().find(|&&m| m < end && m >= first) else {
+            return false;
+        };
+        self.remove_lines(start, end);
+        true
+    }
+
+    /// Cut lines `a..b` (stable ids) out of scrollback + screen. The cursor
+    /// keeps its screen row while older scrollback slides down to fill the
+    /// gap; if there isn't enough, blank rows are added below.
+    fn remove_lines(&mut self, a: u64, b: u64) {
+        let (h, rows, cols) = (self.history.len(), self.rows, self.cols);
+        let base = self.history.evicted;
+        let (ia, ib) = ((a - base) as usize, (b - base) as usize);
+        let n = ib - ia;
+        let cursor_at = h + self.cursor.row;
+        if ib > cursor_at || n == 0 {
+            return;
+        }
+        let mut all: Vec<Line> = self
+            .history
+            .take()
+            .into_iter()
+            .chain(self.main.lines.drain(..))
+            .collect();
+        all.drain(ia..ib);
+        let c = cursor_at - n;
+        let top = c.saturating_sub(self.cursor.row);
+        all.resize_with(all.len().max(top + rows), || Line::new(cols, Cell::BLANK));
+        let mut screen = all.split_off(top);
+        screen.truncate(rows);
+        for line in &mut screen {
+            fit_width(line, cols);
+        }
+        for line in all {
+            self.history.push(line.trimmed());
+        }
+        self.main.lines = screen;
+        self.cursor.row = c - top;
+        let shift = |q: &mut std::collections::VecDeque<u64>| {
+            q.retain(|&m| m < a || m >= b);
+            for m in q.iter_mut().filter(|m| **m >= b) {
+                *m -= n as u64;
+            }
+        };
+        shift(&mut self.marks);
+        shift(&mut self.prompts);
+        self.all_dirty = true;
+    }
+
+    /// Push the screen above the prompt (or the cursor's line) into
+    /// scrollback and leave that line at the top. Main screen only.
+    pub fn clear_screen(&mut self) {
+        if self.alt_active {
+            return;
+        }
+        let top = self.cursor_line_id() - self.cursor.row as u64;
+        let row = match self.prompts.back() {
+            Some(&id) if self.shell_marks && self.in_prompt => {
+                (id.saturating_sub(top) as usize).min(self.cursor.row)
+            }
+            _ => self.cursor.row,
+        };
+        for line in self.main.lines.drain(..row) {
+            self.history.push(line.trimmed());
+        }
+        let cols = self.cols;
+        self.main
+            .lines
+            .resize_with(self.rows, || Line::new(cols, Cell::BLANK));
+        self.cursor.row -= row;
+        self.all_dirty = true;
+    }
+
+    /// Drop scrollback, keep the screen (and the marks on it).
+    pub fn clear_scrollback(&mut self) {
+        self.history.clear();
+        let first = self.history.evicted;
+        self.marks.retain(|&m| m >= first);
+        self.prompts.retain(|&m| m >= first);
+        self.all_dirty = true;
     }
 
     /// Re-wrap scrollback and the main screen to `cols`: soft-wrapped runs are
@@ -1261,6 +1400,7 @@ impl Perform for Term {
                 match params.get(1).and_then(|p| p.first()) {
                     Some(b'A') => {
                         let id = self.cursor_line_id();
+                        self.add_mark(id);
                         if self.prompts.back() != Some(&id) {
                             self.prompts.push_back(id);
                             if self.prompts.len() > 2000 {
@@ -1778,5 +1918,109 @@ mod tests {
         let b = t0.elapsed() - a;
         eprintln!("history {n} -> narrow {a:?}, wide {b:?}");
         assert!(a.as_millis() < 500 && b.as_millis() < 500);
+    }
+    // Feed "<prompt><cmd>", press Return, then the output and a new prompt.
+    fn session(t: &mut Term, cmds: &[&str]) {
+        for c in cmds {
+            run(t, format!("$ {c}").as_bytes());
+            t.mark_return();
+            run(t, format!("\r\nout-{c}\r\n").as_bytes());
+        }
+        run(t, b"$ ");
+    }
+
+    #[test]
+    fn return_marks_and_clear_to_mark() {
+        let mut t = Term::new(20, 6);
+        session(&mut t, &["a", "b", "c"]);
+        // 3 commands x 2 lines + prompt = 7 lines on 6 rows: one in scrollback.
+        assert_eq!(t.history.len(), 1);
+        assert_eq!(t.marks.len(), 3);
+        assert!(t.clear_to_mark());
+        assert_eq!(t.marks.len(), 2);
+        let all: Vec<String> = (0..t.total_lines())
+            .map(|i| {
+                let mut s = String::new();
+                line_text(t.line(i), &t.clusters, &mut s);
+                s.trim_end().to_string()
+            })
+            .collect();
+        assert_eq!(all[..5], ["$ a", "out-a", "$ b", "out-b", "$"]);
+        // Again: removes "b" and its output; history refills the screen.
+        assert!(t.clear_to_mark());
+        assert_eq!(screen(&t)[..3], ["$ a", "out-a", "$"]);
+        assert!(t.clear_to_mark());
+        assert!(!t.clear_to_mark());
+        assert_eq!(screen(&t)[0], "$");
+        assert_eq!(t.cursor_pos(), (0, 2));
+    }
+
+    #[test]
+    fn clear_to_mark_spans_scrollback() {
+        let mut t = Term::new(20, 3);
+        session(&mut t, &["a", "b"]);
+        run(&mut t, b"\r\n");
+        t.mark_return();
+        run(&mut t, b"1\r\n2\r\n3\r\n4\r\n$ ");
+        assert!(t.history.len() > 3);
+        let before = t.marks.clone();
+        assert!(t.clear_to_mark());
+        assert!(t.history.len() < 7);
+        assert_eq!(screen(&t)[t.cursor_pos().0], "$");
+        assert_eq!(t.marks.len(), before.len() - 1);
+        // The terminal keeps working at the cursor.
+        run(&mut t, b"x");
+        assert_eq!(screen(&t)[t.cursor_pos().0], "$ x");
+    }
+
+    #[test]
+    fn marks_are_pruned_and_alt_screen_is_ignored() {
+        let mut t = Term::new(10, 2);
+        t.history.set_limits(3, usize::MAX);
+        for i in 0..20 {
+            run(&mut t, format!("l{i}").as_bytes());
+            t.mark_return();
+            run(&mut t, b"\r\n");
+        }
+        run(&mut t, b"\x1b[?1049h");
+        t.mark_return();
+        assert!(!t.clear_to_mark());
+        run(&mut t, b"\x1b[?1049l");
+        t.mark_return();
+        assert!(t.marks.iter().all(|&m| m >= t.history.evicted));
+        assert!(t.marks.len() <= 6);
+        t.clear_scrollback();
+        assert_eq!(t.history.len(), 0);
+        assert!(t.marks.iter().all(|&m| m >= t.history.evicted));
+    }
+
+    #[test]
+    fn osc_marks_replace_return_marks() {
+        let mut t = Term::new(20, 6);
+        run(&mut t, b"\x1b]133;A\x07$ a\r\nout\r\n\x1b]133;A\x07$ ");
+        t.mark_return();
+        assert_eq!(t.marks.len(), 2);
+        assert!(t.clear_to_mark());
+        assert_eq!(screen(&t)[0], "$");
+    }
+
+    #[test]
+    fn clear_screen_keeps_cursor_line() {
+        let mut t = Term::new(20, 4);
+        run(&mut t, b"one\r\ntwo\r\n$ ");
+        t.clear_screen();
+        assert_eq!(t.cursor_pos(), (0, 2));
+        assert_eq!(screen(&t)[0], "$");
+        assert_eq!(t.history.len(), 2);
+    }
+
+    #[test]
+    fn clear_scrollback_keeps_screen() {
+        let mut t = Term::new(20, 2);
+        run(&mut t, b"1\r\n2\r\n3\r\n4");
+        assert!(t.history.len() >= 2);
+        t.clear_scrollback();
+        assert_eq!(t.history.len(), 0);
+        assert_eq!(screen(&t)[..2], ["3", "4"]);
     }
 }

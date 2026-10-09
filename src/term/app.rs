@@ -439,6 +439,8 @@ impl TermApp {
             holder
         };
         let sep = || NSMenuItem::separatorItem(mtm);
+        // Function keys are key equivalents by their AppKit code point.
+        let key = |code: u32| char::from_u32(code).unwrap().to_string();
         let ctrl = NSEventModifierFlags::Control;
         // Text finder commands carry their action in the tag; only the code
         // viewer's text view answers them, so they're greyed out in terminals.
@@ -537,7 +539,16 @@ impl TermApp {
                         NSTextFinderAction::SetSearchString,
                     ),
                     sep(),
-                    item("Clear Scrollback", Some(sel!(clearScrollback:)), "k", cmd),
+                    item("Clear to Previous Mark", Some(sel!(termClearToMark:)), "l", cmd),
+                    item("Clear Screen", Some(sel!(termClearScreen:)), "l", cmd | ctrl),
+                    item("Clear to Start", Some(sel!(clearScrollback:)), "k", cmd),
+                    item(
+                        "Clear Scrollback",
+                        Some(sel!(termClearScrollbackOnly:)),
+                        "k",
+                        cmd | opt,
+                    ),
+                    sep(),
                     item(
                         "Emoji & Symbols",
                         Some(sel!(orderFrontCharacterPalette:)),
@@ -551,6 +562,20 @@ impl TermApp {
                 vec![
                     item("Toggle Sidebar", Some(sel!(termToggleSidebar:)), "b", cmd),
                     item("Search Tabs…", Some(sel!(termSearchTabs:)), "f", cmd | shift),
+                    sep(),
+                    item("Previous Mark", Some(sel!(termPreviousMark:)), &key(0xF700), cmd),
+                    item("Next Mark", Some(sel!(termNextMark:)), &key(0xF701), cmd),
+                    item("Scroll to Top", Some(sel!(termScrollToTop:)), &key(0xF729), cmd),
+                    item(
+                        "Scroll to Bottom",
+                        Some(sel!(termScrollToBottom:)),
+                        &key(0xF72B),
+                        cmd,
+                    ),
+                    item("Page Up", Some(sel!(termPageUp:)), &key(0xF72C), cmd),
+                    item("Page Down", Some(sel!(termPageDown:)), &key(0xF72D), cmd),
+                    item("Line Up", Some(sel!(termLineUp:)), &key(0xF72C), cmd | opt),
+                    item("Line Down", Some(sel!(termLineDown:)), &key(0xF72D), cmd | opt),
                     sep(),
                     item("Toggle Word Wrap", Some(sel!(appToggleWrap:)), "z", opt),
                     vim,
@@ -741,6 +766,7 @@ mod snap {
                     .replace("\\t", "\t");
                 view.write(text.as_bytes());
             }
+            "line" => view.submit(arg),
             "insert" => view.commit_text(arg),
             "newtab" => bench.iter().for_each(|b| b.new_tab()),
             "split" => bench.iter().for_each(|b| b.split(arg != "down")),
@@ -823,6 +849,16 @@ mod snap {
                     footprint_mb(),
                     view.mem_bytes() as f64 / 1048576.0
                 );
+            }
+            "cmd" => {
+                // cmd <selector name, no colon>: invoke a menu action on the view.
+                let sel = objc2::runtime::Sel::register(&std::ffi::CString::new(format!("{arg}:")).unwrap());
+                let _: () = unsafe {
+                    objc2::msg_send![&*view, performSelector: sel, withObject: std::ptr::null::<objc2::runtime::AnyObject>()]
+                };
+            }
+            "dump" => {
+                std::fs::write(out.join(format!("{arg}.txt")), view.all_text()).ok();
             }
             "settings" => super::super::settings::show(app_mtm()),
             "setting" => {

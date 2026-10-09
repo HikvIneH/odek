@@ -145,7 +145,12 @@ delete a group (its tabs are kept).
 | ⌘C / ⌘V | Copy selection / paste |
 | ⌘A | Select all, scrollback included |
 | ⌘F, ⌘G / ⇧⌘G | Find, next / previous match |
-| ⌘K | Clear scrollback |
+| ⌘L | Clear to previous mark: remove the last command and its output |
+| ⌃⌘L | Clear screen: move it into scrollback, prompt to the top |
+| ⌘K / ⌥⌘K | Clear to start (scrollback and screen) / clear scrollback only |
+| ⌘↑ / ⌘↓ | Jump to previous / next mark (each Return, or shell prompt) |
+| ⌘Home / ⌘End | Scroll to top / bottom |
+| ⌘PageUp / ⌘PageDown, ⌥⌘PageUp / ⌥⌘PageDown | Scroll a page / a line |
 | ⇧PageUp / ⇧PageDown, ⇧Home / ⇧End | Scroll back / forward, to top / bottom |
 | ⌘← / ⌘→ / ⌘⌫ | Start of line / end of line / delete line |
 | ⌥← / ⌥→ / ⌥⌫ | Word left / word right / delete word |

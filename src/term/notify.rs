@@ -80,10 +80,10 @@ impl Limiter {
 
 // ---- preference ----
 
+/// Off unless turned on: shells ring the bell for small things (a Tab
+/// completion with no match), and a banner for each was more noise than help.
 pub fn enabled() -> bool {
-    let d = NSUserDefaults::standardUserDefaults();
-    let key = NSString::from_str(DEFAULTS_KEY);
-    d.objectForKey(&key).is_none() || d.boolForKey(&key)
+    NSUserDefaults::standardUserDefaults().boolForKey(&NSString::from_str(DEFAULTS_KEY))
 }
 
 pub fn set_enabled(on: bool) {

@@ -36,7 +36,7 @@ session produces.
 
 - **Tabs grouped by project** in a sidebar: search, drag to reorder or move between groups, rename, collapse
 - **Status at a glance**: each tab shows its folder and a dot, green while a program runs and orange when one rang the bell or sent a notification you haven't seen
-- **Notifications**: when a tab you aren't looking at needs you (an agent finished or is waiting), macOS shows a banner; click it to jump to that tab
+- **Notifications** (optional, off by default): when a tab you aren't looking at needs you (an agent finished or is waiting), macOS shows a banner; click it to jump to that tab
 - **Split panes**, side by side or stacked, as many as you like, with draggable dividers
 - **Comes back as you left it**: groups, tabs, splits and every pane's folder are restored on relaunch
 - **Asks before ending work**: closing a pane, tab or the app asks first while a program such as Claude Code is still running, or a file has unsaved changes
@@ -237,7 +237,7 @@ which refuses rather than merging when your branch has diverged.
 - **Option sends Meta**: on, Option+key sends Esc+key as most shells and
   agents expect; off, Option types characters such as ™ and accents
 
-Notifications for background tabs can be turned off in **View ▸ Notify When a
+Notifications for background tabs are off by default; turn them on in **View ▸ Notify When a
 Background Tab Needs Attention**. Claude Code rings the terminal bell when it
 finishes or needs input if its notification setting is the terminal bell.
 

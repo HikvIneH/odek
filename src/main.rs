@@ -19,9 +19,15 @@ pub static STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLoc
 
 fn main() {
     STARTED.get_or_init(std::time::Instant::now);
-    // `odek --term [dir]`: terminal windows (in progress).
-    let mut args = std::env::args().skip(1).filter(|a| !a.starts_with("-psn"));
-    if args.next().as_deref() == Some("--term") {
+    // `odek --term [dir]`, or the binary installed as `odek-term`: terminal
+    // windows (in progress).
+    let exe = std::env::args().next().unwrap_or_default();
+    let as_term = exe.rsplit('/').next() == Some("odek-term");
+    let mut args = std::env::args().skip(1).filter(|a| !a.starts_with("-psn")).peekable();
+    if as_term || args.peek().map(String::as_str) == Some("--term") {
+        if !as_term {
+            args.next();
+        }
         let dir = args
             .next()
             .map(std::path::PathBuf::from)

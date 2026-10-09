@@ -248,6 +248,7 @@ impl TermApp {
                     item("Find Previous", Some(sel!(termFindPrevious:)), "g", cmd | NSEventModifierFlags::Shift),
                     sep(),
                     item("Clear Scrollback", Some(sel!(clearScrollback:)), "k", cmd),
+                    item("Emoji & Symbols", Some(sel!(orderFrontCharacterPalette:)), "", cmd),
                 ],
             ),
             menu(
@@ -357,6 +358,8 @@ mod snap {
                 let text = arg.replace("\\r", "\r").replace("\\e", "\x1b").replace("\\t", "\t");
                 view.write(text.as_bytes());
             }
+            "insert" => view.commit_text(arg),
+            "mark" => view.mark_text(arg, objc2_foundation::NSRange::new(arg.encode_utf16().count(), 0)),
             "resize" => {
                 if let Some((w, h)) = arg.split_once('x') {
                     let (cw, ch) = view.cell_size();

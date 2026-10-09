@@ -3,6 +3,7 @@ mod boxdraw;
 mod find;
 mod findbar;
 pub mod grid;
+mod ime;
 pub mod input;
 pub mod links;
 pub mod session;

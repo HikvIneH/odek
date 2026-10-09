@@ -41,6 +41,7 @@ session produces.
 
 - **Tabs grouped by project** in a sidebar: search, drag to reorder or move between groups, rename, collapse
 - **Status at a glance**: each tab shows its folder and a dot, green while a program runs and orange when one rang the bell or sent a notification you haven't seen
+- **Notifications**: when a tab you aren't looking at needs you (an agent finished or is waiting), macOS shows a banner; click it to jump to that tab
 - **Split panes**, side by side or stacked, as many as you like, with draggable dividers
 - **Comes back as you left it**: groups, tabs, splits and every pane's folder are restored on relaunch
 - **Asks before ending work**: closing a pane, tab or the app asks first while a program such as Claude Code is still running, or a file has unsaved changes
@@ -56,6 +57,7 @@ session produces.
 - **Nerd Font icons**: uses MesloLGS NF (or another Nerd Font) when installed, so prompt themes like powerlevel10k show their icons
 - **Scrollback** of 10,000 lines per pane, find (⌘F) with every match highlighted, selection by word or line, ⌘K to clear
 - **Links**: ⌘-click URLs and file paths, including `path:line:col` and the hyperlinks Claude Code prints
+- **Settings** (⌘,): font, size, light/dark/system theme, scrollback length, and whether Option sends Meta
 
 ### Code viewer
 
@@ -136,6 +138,7 @@ one window. You can also drop a folder or file on the Dock icon.
 | ⌘] / ⌘[ | Next / previous pane |
 | ⇧⌘R | Rename tab (an empty name follows the program's title) |
 | ⌘B, ⇧⌘F | Toggle sidebar, search tabs |
+| ⌘, | Settings |
 
 Right-click a tab or group for more: move a tab to another group, rename or
 delete a group (its tabs are kept).
@@ -204,14 +207,21 @@ when you switch back to the app, at most every 5 minutes; fetch never changes
 your files. Click the branch for **Fetch Now** and **Pull (fast-forward only)**,
 which refuses rather than merging when your branch has diverged.
 
-### Fonts
+### Settings
 
-The terminal uses the first installed of MesloLGS NF and a few other Nerd
-Fonts, otherwise SF Mono. To choose another:
+**Odek ▸ Settings…** (⌘,) changes every pane at once:
 
-```sh
-defaults write com.hikvineh.odek terminalFont "JetBrains Mono"
-```
+- **Font**: Automatic picks the first installed of MesloLGS NF and a few other
+  Nerd Fonts, otherwise SF Mono; or choose any fixed-width font
+- **Font size** (⌘= and ⌘- change one pane for the moment; ⌘0 goes back)
+- **Theme**: follow the system, or always light or dark
+- **Scrollback**: 1,000 to 50,000 lines per pane (8 MB per 10,000 lines at most)
+- **Option sends Meta**: on, Option+key sends Esc+key as most shells and
+  agents expect; off, Option types characters such as ™ and accents
+
+Notifications for background tabs can be turned off in **View ▸ Notify When a
+Background Tab Needs Attention**. Claude Code rings the terminal bell when it
+finishes or needs input if its notification setting is the terminal bell.
 
 ## How it works
 
@@ -288,6 +298,8 @@ The icon is drawn by `assets/make-icon.swift`, with simpler artwork at 16 and
 ```
 src/main.rs            entry point: the terminal, or --viewer
 src/term/app.rs        app delegate, menus, scripted snapshot mode
+src/term/settings.rs   the settings window
+src/term/notify.rs     notifications for background tabs
 src/term/window.rs     workspace window: sidebar, panes, code viewer pane, dialogs
 src/term/workspace.rs  groups, tabs, split trees; save and restore
 src/term/sidebar.rs    grouped tab list; header.rs is the pane title strip

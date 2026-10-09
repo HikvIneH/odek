@@ -1038,7 +1038,7 @@ impl Workbench {
 
     fn viewer_event(&self, id: Id, e: ViewerEvent) {
         match e {
-            ViewerEvent::Title(_) => self.refresh(),
+            ViewerEvent::Title => self.refresh(),
             ViewerEvent::Focused => {
                 let tab = self.ws.borrow().tab_of_pane(id);
                 if let Some(tab) = tab

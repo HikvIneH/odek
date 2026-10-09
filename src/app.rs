@@ -48,10 +48,26 @@ const TAB_BAR_HEIGHT: f64 = 30.0;
 const DEFAULT_FONT_SIZE: f64 = 12.5;
 const STATUS_BAR_HEIGHT: f64 = 22.0;
 
+define_class!(
+    /// Root of an embedded viewer: paints the window background, which a
+    /// window would otherwise provide behind the tab strip and status bar.
+    #[unsafe(super(NSView, NSResponder, NSObject))]
+    #[thread_kind = MainThreadOnly]
+    struct Backdrop;
+
+    impl Backdrop {
+        #[unsafe(method(drawRect:))]
+        fn draw_rect(&self, rect: NSRect) {
+            NSColor::windowBackgroundColor().setFill();
+            NSRectFill(rect);
+        }
+    }
+);
+
 /// What an embedded viewer tells its owner.
 pub enum ViewerEvent {
-    /// Title for the pane: file name or project folder, with ● when unsaved.
-    Title(String),
+    /// The title changed; read it with `display_title`.
+    Title,
     /// The editor or file tree took keyboard focus.
     Focused,
     /// ⌘W with no file open: the owner should close the viewer pane.
@@ -703,7 +719,10 @@ impl App {
     /// A viewer to embed in a pane; its view is `root_view()`.
     pub fn new_embedded(frame: NSRect, mtm: MainThreadMarker) -> Retained<Self> {
         let this = Self::new(mtm);
-        let root = NSView::initWithFrame(NSView::alloc(mtm), frame);
+        let root: Retained<Backdrop> = unsafe { msg_send![Backdrop::alloc(mtm), initWithFrame: frame] };
+        // Without this (macOS 14+) the fill spills over the pane header.
+        root.setClipsToBounds(true);
+        let root = Retained::into_super(root);
         root.setAutoresizingMask(
             NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
         );
@@ -743,7 +762,7 @@ impl App {
                 w.setTitle(&NSString::from_str(title));
                 w.setRepresentedURL(file.and_then(NSURL::from_file_path).as_deref());
             }
-            None => self.emit(ViewerEvent::Title(self.display_title())),
+            None => self.emit(ViewerEvent::Title),
         }
     }
 
@@ -2056,7 +2075,7 @@ impl App {
         let dirty = self.ivars().tabs.borrow().list.iter().any(|t| t.dirty);
         match &self.ui().window {
             Some(w) => w.setDocumentEdited(dirty),
-            None => self.emit(ViewerEvent::Title(self.display_title())),
+            None => self.emit(ViewerEvent::Title),
         }
     }
 

@@ -73,3 +73,63 @@ impl PaneHeader {
         }
     }
 }
+
+define_class!(
+    /// A pane: the header strip on top (when shown) and the pane's content
+    /// filling the rest. It places both itself on every layout pass, so a
+    /// window layout pass (the code viewer brings Auto Layout into the
+    /// window) can't shrink the content to nothing.
+    #[unsafe(super(NSView, NSResponder, NSObject))]
+    #[thread_kind = MainThreadOnly]
+    pub struct PaneBox;
+
+    impl PaneBox {
+        #[unsafe(method(layout))]
+        fn layout(&self) {
+            let _: () = unsafe { msg_send![super(self), layout] };
+            self.place();
+        }
+
+        #[unsafe(method(setFrameSize:))]
+        fn set_frame_size(&self, size: NSSize) {
+            let _: () = unsafe { msg_send![super(self), setFrameSize: size] };
+            self.place();
+        }
+    }
+);
+
+impl PaneBox {
+    pub fn new(frame: NSRect, mtm: MainThreadMarker) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(());
+        unsafe { msg_send![super(this), initWithFrame: frame] }
+    }
+
+    /// Header at the top if visible, everything else below it.
+    pub fn place(&self) {
+        let b = self.bounds().size;
+        let header = self
+            .subviews()
+            .iter()
+            .find(|v| v.downcast_ref::<PaneHeader>().is_some() && !v.isHidden());
+        let top = if header.is_some() { HEADER_H } else { 0.0 };
+        for v in self.subviews().iter() {
+            let frame = if v.downcast_ref::<PaneHeader>().is_some() {
+                NSRect::new(
+                    NSPoint::new(0.0, b.height - HEADER_H),
+                    NSSize::new(b.width, HEADER_H),
+                )
+            } else {
+                NSRect::new(
+                    NSPoint::new(0.0, 0.0),
+                    NSSize::new(b.width, (b.height - top).max(0.0)),
+                )
+            };
+            if v.frame() != frame {
+                v.setFrame(frame);
+            }
+        }
+    }
+}
+
+/// Height of a pane's header strip.
+pub const HEADER_H: f64 = 24.0;

@@ -21,7 +21,7 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
-use super::header::PaneHeader;
+use super::header::{HEADER_H, PaneBox, PaneHeader};
 use super::settings;
 use super::sidebar::{PaneRow, Row, RowKey, Sidebar, SidebarEvent};
 use super::target::Target;
@@ -30,14 +30,13 @@ use super::workspace::{Closed, Id, Node, Workspace};
 use crate::app::{App, ViewerEvent};
 
 const SIDEBAR_W: f64 = 240.0;
-const HEADER_H: f64 = 24.0;
 const SHELLS: &[&str] = &[
     "zsh", "bash", "fish", "sh", "dash", "tcsh", "csh", "ksh", "nu", "login",
 ];
 
 struct Pane {
     /// Header (when the tab is split) above the terminal.
-    container: Retained<NSView>,
+    container: Retained<PaneBox>,
     header: Retained<PaneHeader>,
     term: Retained<TermView>,
     title: String,
@@ -50,7 +49,7 @@ struct Pane {
 /// The code viewer pane: a header above the viewer's own views.
 struct Viewer {
     id: Id,
-    container: Retained<NSView>,
+    container: Retained<PaneBox>,
     header: Retained<PaneHeader>,
     app: Retained<App>,
 }
@@ -314,7 +313,7 @@ impl Workbench {
         let mtm = self.mtm;
         let size = self.content.bounds().size;
         let frame = NSRect::new(NSPoint::new(0.0, 0.0), size);
-        let container = NSView::initWithFrame(NSView::alloc(mtm), frame);
+        let container = PaneBox::new(frame, mtm);
         container.setAutoresizingMask(
             NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
         );
@@ -555,26 +554,18 @@ impl Workbench {
             Node::Pane(id) if Some(*id) == self.viewer_id() => {
                 let viewer = self.viewer.borrow();
                 let v = viewer.as_ref().unwrap();
-                v.container.setFrame(frame);
                 v.header.setHidden(!headers);
-                let h = frame.size.height - if headers { HEADER_H } else { 0.0 };
-                v.app.root_view().setFrame(NSRect::new(
-                    NSPoint::new(0.0, 0.0),
-                    NSSize::new(frame.size.width, h.max(10.0)),
-                ));
-                v.container.clone()
+                v.container.setFrame(frame);
+                v.container.place();
+                Retained::into_super(v.container.clone())
             }
             Node::Pane(id) => {
                 let panes = self.panes.borrow();
                 let p = &panes[id];
-                p.container.setFrame(frame);
                 p.header.setHidden(!headers);
-                let h = frame.size.height - if headers { HEADER_H } else { 0.0 };
-                p.term.setFrame(NSRect::new(
-                    NSPoint::new(0.0, 0.0),
-                    NSSize::new(frame.size.width, h.max(10.0)),
-                ));
-                p.container.clone()
+                p.container.setFrame(frame);
+                p.container.place();
+                Retained::into_super(p.container.clone())
             }
             Node::Split {
                 across,
@@ -1142,7 +1133,7 @@ impl Workbench {
         let id = self.ws.borrow_mut().new_id();
         let size = self.content.bounds().size;
         let frame = NSRect::new(NSPoint::new(0.0, 0.0), size);
-        let container = NSView::initWithFrame(NSView::alloc(mtm), frame);
+        let container = PaneBox::new(frame, mtm);
         container.setAutoresizingMask(
             NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
         );

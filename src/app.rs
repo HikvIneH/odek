@@ -1,5 +1,10 @@
-//! The window: file tree on the left, tab strip + editor on the right, and a
-//! ⌘P quick-open panel. One delegate object serves every AppKit callback.
+//! The code viewer: file tree on the left, tab strip + editor on the right,
+//! and a ⌘P quick-open panel. One object serves every AppKit callback.
+//!
+//! It runs standalone (`odek <folder>`, its own window and menus, as the app
+//! delegate) or embedded as a pane in the terminal's workspace window. It is
+//! an NSViewController so that, embedded, AppKit puts it in the responder
+//! chain after its view and menu commands reach it while it has focus.
 
 use std::cell::{Cell, OnceCell, RefCell};
 use std::fs;
@@ -9,7 +14,7 @@ use std::time::{Instant, SystemTime};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol, ProtocolObject, Sel};
 use objc2::{
-    AllocAnyThread, ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel,
+    AllocAnyThread, ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel,
 };
 use objc2_app_kit::*;
 use objc2_foundation::*;
@@ -42,14 +47,33 @@ const TAB_BAR_HEIGHT: f64 = 30.0;
 const DEFAULT_FONT_SIZE: f64 = 12.5;
 const STATUS_BAR_HEIGHT: f64 = 22.0;
 
+/// What an embedded viewer tells its owner.
+pub enum ViewerEvent {
+    /// Title for the pane: file name or project folder, with ● when unsaved.
+    Title(String),
+    /// The editor or file tree took keyboard focus.
+    Focused,
+    /// ⌘W with no file open: the owner should close the viewer pane.
+    Close,
+}
+
+type ViewerHandler = Box<dyn Fn(ViewerEvent)>;
+
 thread_local! {
-    /// The app delegate, for work hopping back from background threads.
+    /// The viewer, for work hopping back from background threads.
     static INSTANCE: OnceCell<Retained<App>> = const { OnceCell::new() };
 }
 
 /// Called by the editor view for every key; true if Vim mode consumed it.
 pub fn vim_key_down(event: &NSEvent) -> bool {
     instance().is_some_and(|app| app.vim_key(event))
+}
+
+/// Called by the editor view when it becomes first responder.
+pub fn editor_focused() {
+    if let Some(app) = instance() {
+        app.emit(ViewerEvent::Focused);
+    }
 }
 
 fn instance() -> Option<Retained<App>> {
@@ -90,7 +114,11 @@ struct Quick {
 }
 
 struct Ui {
-    window: Retained<NSWindow>,
+    /// Its own window when standalone; None when embedded in a pane.
+    window: Option<Retained<NSWindow>>,
+    /// Everything below lives in this view: the window's content view, or
+    /// the pane container.
+    root: Retained<NSView>,
     split: Retained<NSSplitView>,
     outline: Retained<NSOutlineView>,
     tab_bar: Retained<NSStackView>,
@@ -121,10 +149,13 @@ pub struct Ivars {
     git: RefCell<gitbar::GitState>,
     vim: RefCell<crate::vim::Vim>,
     vim_on: Cell<bool>,
+    on_event: RefCell<Option<ViewerHandler>>,
+    /// File name or project folder, without the unsaved dot.
+    title: RefCell<String>,
 }
 
 define_class!(
-    #[unsafe(super(NSObject))]
+    #[unsafe(super(NSViewController, NSResponder, NSObject))]
     #[thread_kind = MainThreadOnly]
     #[ivars = Ivars]
     pub struct App;
@@ -161,8 +192,9 @@ define_class!(
                     _ => self.choose_folder(),
                 }
             }
-            let ui = self.ui();
-            ui.window.makeKeyAndOrderFront(None);
+            if let Some(w) = &self.ui().window {
+                w.makeKeyAndOrderFront(None);
+            }
             NSApplication::sharedApplication(self.mtm()).activate();
             #[cfg(feature = "selftest")]
             self.start_self_test();
@@ -250,6 +282,7 @@ define_class!(
 
         #[unsafe(method(treeClicked:))]
         fn tree_clicked(&self, _sender: Option<&AnyObject>) {
+            self.emit(ViewerEvent::Focused);
             self.tree_activate(false);
         }
 
@@ -376,24 +409,60 @@ define_class!(
 
         #[unsafe(method(appCloseTab:))]
         fn menu_close_tab(&self, _sender: Option<&AnyObject>) {
-            let ui = self.ui();
-            if NSApplication::sharedApplication(self.mtm()).keyWindow().is_some_and(|w| ptr_eq(&*w, &*ui.panel)) {
-                ui.panel.orderOut(None);
-                return;
-            }
-            let current = self.ivars().tabs.borrow().current;
-            match current {
-                Some(i) => self.close_tab(i),
-                None => ui.window.performClose(None),
-            }
+            self.close_current();
+        }
+
+        // ---- embedded: commands from the terminal's menus ----
+
+        #[unsafe(method(loadView))]
+        fn load_view(&self) {
+            // Never load a nib; embedding sets the view explicitly.
+            self.setView(&NSView::new(self.mtm()));
+        }
+
+        #[unsafe(method(termClosePane:))]
+        fn term_close_pane(&self, _sender: Option<&AnyObject>) {
+            self.close_current();
+        }
+
+        #[unsafe(method(termFind:))]
+        fn term_find(&self, _sender: Option<&AnyObject>) {
+            self.finder(NSTextFinderAction::ShowFindInterface);
+        }
+
+        #[unsafe(method(termFindNext:))]
+        fn term_find_next(&self, _sender: Option<&AnyObject>) {
+            self.finder(NSTextFinderAction::NextMatch);
+        }
+
+        #[unsafe(method(termFindPrevious:))]
+        fn term_find_previous(&self, _sender: Option<&AnyObject>) {
+            self.finder(NSTextFinderAction::PreviousMatch);
+        }
+
+        #[unsafe(method(termZoomIn:))]
+        fn term_zoom_in(&self, _sender: Option<&AnyObject>) {
+            self.set_font_size(self.ivars().font_size.get() + 1.0);
+        }
+
+        #[unsafe(method(termZoomOut:))]
+        fn term_zoom_out(&self, _sender: Option<&AnyObject>) {
+            self.set_font_size(self.ivars().font_size.get() - 1.0);
+        }
+
+        #[unsafe(method(termZoomReset:))]
+        fn term_zoom_reset(&self, _sender: Option<&AnyObject>) {
+            self.set_font_size(DEFAULT_FONT_SIZE);
+        }
+
+        #[unsafe(method(termShowFiles:))]
+        fn term_show_files(&self, _sender: Option<&AnyObject>) {
+            self.toggle_tree();
         }
 
         #[unsafe(method(appToggleSidebar:))]
         fn menu_toggle_sidebar(&self, _sender: Option<&AnyObject>) {
-            let ui = self.ui();
-            let side = &ui.split.subviews().objectAtIndex(0);
-            side.setHidden(!side.isHidden());
-            ui.split.adjustSubviews();
+            self.toggle_tree();
         }
 
         #[unsafe(method(appToggleWrap:))]
@@ -604,6 +673,15 @@ fn load_file(path: &Path) -> std::io::Result<Loaded> {
     })
 }
 
+/// Nearest folder at or above `dir` holding a git repository, skipping the
+/// home folder (a dotfiles repo there would make everything one project).
+fn project_root(dir: &Path) -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    dir.ancestors()
+        .find(|d| Some(*d) != home.as_deref() && d.join(".git").exists())
+        .map(Path::to_path_buf)
+}
+
 fn mtime(path: &Path) -> Option<SystemTime> {
     fs::metadata(path).and_then(|m| m.modified()).ok()
 }
@@ -619,6 +697,185 @@ fn comment_prefix(lang: Option<Lang>) -> Option<&'static str> {
 }
 
 impl App {
+    // ------------------------------------------------------------ embedding
+
+    /// A viewer to embed in a pane; its view is `root_view()`.
+    pub fn new_embedded(frame: NSRect, mtm: MainThreadMarker) -> Retained<Self> {
+        let this = Self::new(mtm);
+        let root = NSView::initWithFrame(NSView::alloc(mtm), frame);
+        root.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
+        );
+        this.build_into(&root, None);
+        this.setView(&root);
+        this
+    }
+
+    pub fn root_view(&self) -> Retained<NSView> {
+        self.ui().root.clone()
+    }
+
+    pub fn set_on_event(&self, f: impl Fn(ViewerEvent) + 'static) {
+        *self.ivars().on_event.borrow_mut() = Some(Box::new(f));
+    }
+
+    fn emit(&self, e: ViewerEvent) {
+        if let Some(f) = self.ivars().on_event.borrow().as_ref() {
+            f(e);
+        }
+    }
+
+    /// The window the viewer is in: its own, or the one hosting its pane.
+    fn host_window(&self) -> Option<Retained<NSWindow>> {
+        let ui = self.ui();
+        ui.window.clone().or_else(|| ui.root.window())
+    }
+
+    fn set_title(&self, title: &str, file: Option<&Path>) {
+        *self.ivars().title.borrow_mut() = title.to_string();
+        match &self.ui().window {
+            Some(w) => {
+                w.setTitle(&NSString::from_str(title));
+                w.setRepresentedURL(file.and_then(NSURL::from_file_path).as_deref());
+            }
+            None => self.emit(ViewerEvent::Title(self.display_title())),
+        }
+    }
+
+    /// Title with ● when a file has unsaved changes.
+    pub fn display_title(&self) -> String {
+        let dirty = self.ivars().tabs.borrow().list.iter().any(|t| t.dirty);
+        let title = self.ivars().title.borrow();
+        if dirty { format!("● {title}") } else { title.clone() }
+    }
+
+    pub fn root_dir(&self) -> Option<PathBuf> {
+        self.ivars().tree.borrow().as_ref().map(|t| t.root().to_path_buf())
+    }
+
+    /// Switch the project to `root` unless it is already open. False if the
+    /// user cancelled (unsaved changes).
+    fn ensure_root(&self, root: &Path) -> bool {
+        if self.root_dir().as_deref() == Some(root) {
+            return true;
+        }
+        self.set_root(root.to_path_buf())
+    }
+
+    /// Open `path` (a file, or a folder for the tree), at a 1-based line and
+    /// column. Its project is the nearest git repository, else `near` (the
+    /// terminal's folder) when it contains the file, else the file's folder.
+    pub fn open_location(&self, path: &Path, line: Option<u32>, col: Option<u32>, near: Option<&Path>) {
+        let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        if path.is_dir() {
+            return self.show_tree_in(&path);
+        }
+        let inside = self.root_dir().is_some_and(|r| path.starts_with(r));
+        if !inside {
+            let parent = path.parent().unwrap_or(&path);
+            let root = project_root(parent).unwrap_or_else(|| match near {
+                Some(n) if path.starts_with(n) => n.to_path_buf(),
+                _ => parent.to_path_buf(),
+            });
+            if !self.set_root(root) {
+                return;
+            }
+        }
+        self.open_file(&path, false);
+        self.reveal(&path);
+        if let Some(line) = line {
+            self.go_to(line as usize, col.unwrap_or(1) as usize);
+        }
+    }
+
+    /// ⌘P from a terminal: quick open in that folder's project.
+    pub fn quick_open_in(&self, dir: &Path) {
+        let root = project_root(dir).unwrap_or_else(|| dir.to_path_buf());
+        if self.ensure_root(&root) {
+            self.show_quick_open();
+        }
+    }
+
+    /// Show the file tree for a folder's project, with the folder revealed.
+    pub fn show_tree_in(&self, dir: &Path) {
+        let root = project_root(dir).unwrap_or_else(|| dir.to_path_buf());
+        if !self.ensure_root(&root) {
+            return;
+        }
+        let ui = self.ui();
+        let side = ui.split.subviews().objectAtIndex(0);
+        if side.isHidden() {
+            side.setHidden(false);
+            ui.split.adjustSubviews();
+        }
+        if dir != root {
+            self.reveal(dir);
+        }
+        if let Some(w) = self.host_window() {
+            w.makeFirstResponder(Some(&ui.outline));
+        }
+    }
+
+    /// Keyboard focus to the editor, or the tree when no file is open.
+    pub fn focus(&self) {
+        let ui = self.ui();
+        let Some(w) = self.host_window() else { return };
+        if self.ivars().tabs.borrow().current.is_some() {
+            w.makeFirstResponder(Some(&ui.text));
+        } else {
+            w.makeFirstResponder(Some(&ui.outline));
+        }
+    }
+
+    /// Close every file (after `confirm_discard_all`) to free their memory.
+    pub fn release_files(&self) {
+        {
+            let mut tabs = self.ivars().tabs.borrow_mut();
+            tabs.list = Vec::new();
+            tabs.current = None;
+        }
+        *self.ivars().quick.borrow_mut() = Quick::default();
+        self.ui().panel.orderOut(None);
+        self.show_placeholder();
+        self.rebuild_tab_bar();
+    }
+
+    /// The app became active again: pick up changes on disk, fetch git.
+    pub fn app_activated(&self) {
+        if self.ivars().ui.get().is_some() {
+            self.refresh_from_disk();
+            self.git_on_activate();
+        }
+    }
+
+    fn toggle_tree(&self) {
+        let ui = self.ui();
+        let side = &ui.split.subviews().objectAtIndex(0);
+        side.setHidden(!side.isHidden());
+        ui.split.adjustSubviews();
+    }
+
+    /// ⌘W: hide quick open, else close the current file, else the window/pane.
+    fn close_current(&self) {
+        let ui = self.ui();
+        if NSApplication::sharedApplication(self.mtm()).keyWindow().is_some_and(|w| ptr_eq(&*w, &*ui.panel)) {
+            ui.panel.orderOut(None);
+            return;
+        }
+        let current = self.ivars().tabs.borrow().current;
+        match (current, &ui.window) {
+            (Some(i), _) => self.close_tab(i),
+            (None, Some(w)) => w.performClose(None),
+            (None, None) => self.emit(ViewerEvent::Close),
+        }
+    }
+
+    fn finder(&self, action: NSTextFinderAction) {
+        let item = NSMenuItem::new(self.mtm());
+        item.setTag(action.0);
+        let _: () = unsafe { msg_send![&*self.ui().text, performTextFinderAction: &*item] };
+    }
+
     fn quick_command(&self, cmd: Sel) -> bool {
         let ui = self.ui();
         let rows = self.ivars().quick.borrow().hits.len() as NSInteger;
@@ -673,8 +930,11 @@ impl App {
             git: RefCell::new(gitbar::GitState::default()),
             vim: RefCell::new(crate::vim::Vim::new()),
             vim_on: Cell::new(NSUserDefaults::standardUserDefaults().boolForKey(ns_string!("vimMode"))),
+            on_event: RefCell::new(None),
+            title: RefCell::new(String::new()),
         });
-        let this: Retained<Self> = unsafe { msg_send![super(this), init] };
+        let this: Retained<Self> =
+            unsafe { msg_send![super(this), initWithNibName: None::<&NSString>, bundle: None::<&NSBundle>] };
         INSTANCE.with(|i| {
             let _ = i.set(this.clone());
         });
@@ -724,6 +984,7 @@ impl App {
 
     // ---------------------------------------------------------------- UI build
 
+    /// Standalone: the main menu and a window holding the viewer.
     fn build_ui(&self) {
         let mtm = self.mtm();
         let app = NSApplication::sharedApplication(mtm);
@@ -751,6 +1012,12 @@ impl App {
         window.setTabbingMode(NSWindowTabbingMode::Disallowed);
 
         let content = window.contentView().expect("window has a content view");
+        self.build_into(&content, Some(window));
+    }
+
+    /// Build the viewer's views inside `content`.
+    fn build_into(&self, content: &NSView, window: Option<Retained<NSWindow>>) {
+        let mtm = self.mtm();
         let bounds = content.bounds();
 
         // Split: sidebar | editor
@@ -1017,6 +1284,7 @@ impl App {
 
         let ui = Ui {
             window,
+            root: content.retain(),
             split,
             outline,
             tab_bar,
@@ -1276,8 +1544,7 @@ impl App {
         *self.ivars().tree.borrow_mut() = Some(Tree::new(root));
         *self.ivars().quick.borrow_mut() = Quick::default();
         ui.outline.reloadData();
-        ui.window.setTitle(&NSString::from_str(&name));
-        ui.window.setRepresentedURL(None);
+        self.set_title(&name, None);
         self.git_project_changed();
         true
     }
@@ -1557,14 +1824,14 @@ impl App {
             .scrollToPoint(scroll.unwrap_or(NSPoint::new(-insets.left, -insets.top)));
         ui.scroll.reflectScrolledClipView(&ui.scroll.contentView());
         self.apply_highlight();
-        ui.window.makeFirstResponder(Some(&ui.text));
+        if let Some(w) = self.host_window() {
+            w.makeFirstResponder(Some(&ui.text));
+        }
         let name = path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        ui.window.setTitle(&NSString::from_str(&name));
-        ui.window
-            .setRepresentedURL(NSURL::from_file_path(&path).as_deref());
+        self.set_title(&name, Some(&path));
         self.rebuild_tab_bar();
         self.vim_reset();
     }
@@ -1575,9 +1842,9 @@ impl App {
         ui.text.setEditable(false);
         ui.scroll.setRulersVisible(false);
         self.set_wrap(false);
-        ui.window.setRepresentedURL(None);
-        if let Some(t) = self.ivars().tree.borrow().as_ref() {
-            ui.window.setTitle(&NSString::from_str(&t.node(ROOT).name));
+        let root_name = self.ivars().tree.borrow().as_ref().map(|t| t.node(ROOT).name.clone());
+        if let Some(name) = root_name {
+            self.set_title(&name, None);
         }
         self.vim_update_ui();
     }
@@ -1766,11 +2033,14 @@ impl App {
 
     fn update_edited_dot(&self) {
         let dirty = self.ivars().tabs.borrow().list.iter().any(|t| t.dirty);
-        self.ui().window.setDocumentEdited(dirty);
+        match &self.ui().window {
+            Some(w) => w.setDocumentEdited(dirty),
+            None => self.emit(ViewerEvent::Title(self.display_title())),
+        }
     }
 
     /// Ask about unsaved tabs. Returns false if the user cancelled.
-    fn confirm_discard_all(&self) -> bool {
+    pub fn confirm_discard_all(&self) -> bool {
         let dirty: Vec<usize> = {
             let tabs = self.ivars().tabs.borrow();
             tabs.list
@@ -1920,7 +2190,8 @@ impl App {
                 q.built = Some(Instant::now());
             }
         }
-        let frame = ui.window.frame();
+        let Some(window) = self.host_window() else { return };
+        let frame = window.convertRectToScreen(ui.root.convertRect_toView(ui.root.bounds(), None));
         let pw = ui.panel.frame().size.width;
         ui.panel.setFrameTopLeftPoint(NSPoint::new(
             frame.origin.x + (frame.size.width - pw) / 2.0,
@@ -2000,7 +2271,6 @@ impl App {
     // ------------------------------------------------------------ editing
 
     fn go_to_line(&self) {
-        let ui = self.ui();
         if self.ivars().tabs.borrow().current.is_none() {
             return;
         }
@@ -2025,6 +2295,12 @@ impl App {
             .next()
             .and_then(|s| s.trim().parse::<usize>().ok())
             .unwrap_or(1);
+        self.go_to(line, col);
+    }
+
+    /// Put the caret at a 1-based line and column of the current file.
+    fn go_to(&self, line: usize, col: usize) {
+        let ui = self.ui();
         let target = {
             let starts = ui.ruler.line_starts(&ui.text);
             let li = line.clamp(1, starts.len()) - 1;
@@ -2037,7 +2313,9 @@ impl App {
         let r = NSRange::new(target, 0);
         ui.text.setSelectedRange(r);
         ui.text.scrollRangeToVisible(r);
-        ui.window.makeFirstResponder(Some(&ui.text));
+        if let Some(w) = self.host_window() {
+            w.makeFirstResponder(Some(&ui.text));
+        }
     }
 
     fn toggle_comment(&self) {

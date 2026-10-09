@@ -16,10 +16,13 @@ use objc2_app_kit::{
     NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSBezierPath, NSColor, NSCursor, NSEvent, NSEventModifierFlags,
     NSFont, NSFontAttributeName, NSFontManager, NSFontTraitMask, NSFontWeightRegular,
     NSForegroundColorAttributeName, NSPasteboard, NSPasteboardTypeString, NSResponder, NSStrikethroughStyleAttributeName,
-    NSStringDrawing, NSUnderlineStyleAttributeName, NSView,
+    NSStringDrawing, NSTextInputClient, NSUnderlineStyleAttributeName, NSView,
 };
-use objc2_foundation::{NSArray, NSDictionary, NSNumber, NSPoint, NSRect, NSSize, NSString, NSUserDefaults};
+use objc2_foundation::{
+    NSArray, NSDictionary, NSNumber, NSPoint, NSRange, NSRangePointer, NSRect, NSSize, NSString, NSUInteger, NSUserDefaults,
+};
 
+use super::ime::{self, Ime};
 use super::grid::{Cell as GCell, Color, Line, Style, attr, flag};
 use super::input::{self, Mods};
 use super::session::{Session, Spawn};
@@ -146,6 +149,7 @@ pub struct Ivars {
     focused: Cell<bool>,
     cursor_row: Cell<usize>,
     exited: Cell<bool>,
+    ime: Ime,
 }
 
 define_class!(
@@ -269,6 +273,72 @@ define_class!(
             self.setNeedsDisplay(true);
         }
     }
+
+    unsafe impl NSTextInputClient for TermView {
+        #[unsafe(method(insertText:replacementRange:))]
+        fn insert_text(&self, string: &AnyObject, _range: NSRange) {
+            self.commit_text(&ime::string_of(string));
+        }
+
+        #[unsafe(method(doCommandBySelector:))]
+        fn do_command(&self, _sel: objc2::runtime::Sel) {
+            // Keys the input method doesn't take (and which aren't beeps): send as before.
+            if let Some(event) = self.ivars().ime.take_event() {
+                self.send_key(&event);
+            }
+        }
+
+        #[unsafe(method(setMarkedText:selectedRange:replacementRange:))]
+        fn set_marked_text(&self, string: &AnyObject, selected: NSRange, _range: NSRange) {
+            self.mark_text(&ime::string_of(string), selected);
+        }
+
+        #[unsafe(method(unmarkText))]
+        fn unmark_text(&self) {
+            if self.ivars().ime.clear() {
+                self.setNeedsDisplay(true);
+            }
+        }
+
+        #[unsafe(method(selectedRange))]
+        fn selected_range(&self) -> NSRange {
+            self.ivars().ime.selected_range()
+        }
+
+        #[unsafe(method(markedRange))]
+        fn marked_range(&self) -> NSRange {
+            self.ivars().ime.marked_range()
+        }
+
+        #[unsafe(method(hasMarkedText))]
+        fn has_marked_text(&self) -> bool {
+            self.ivars().ime.has_marked()
+        }
+
+        #[unsafe(method(attributedSubstringForProposedRange:actualRange:))]
+        fn attributed_substring(
+            &self,
+            _range: NSRange,
+            _actual: NSRangePointer,
+        ) -> *mut AnyObject {
+            std::ptr::null_mut()
+        }
+
+        #[unsafe(method(validAttributesForMarkedText))]
+        fn valid_attributes(&self) -> *mut AnyObject {
+            Retained::autorelease_ptr(NSArray::<NSString>::new()).cast()
+        }
+
+        #[unsafe(method(firstRectForCharacterRange:actualRange:))]
+        fn first_rect(&self, _range: NSRange, _actual: NSRangePointer) -> NSRect {
+            self.ime_screen_rect()
+        }
+
+        #[unsafe(method(characterIndexForPoint:))]
+        fn character_index(&self, _point: NSPoint) -> NSUInteger {
+            ime::NOT_FOUND
+        }
+    }
 );
 
 #[derive(Clone, Copy, PartialEq)]
@@ -301,6 +371,7 @@ impl TermView {
             focused: Cell::new(false),
             cursor_row: Cell::new(0),
             exited: Cell::new(false),
+            ime: Ime::default(),
         });
         let this: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame] };
         VIEWS.with(|v| v.borrow_mut().insert(id, Weak::from_retained(&this)));
@@ -601,6 +672,12 @@ impl TermView {
         if live && t.modes.show_cursor && !self.ivars().exited.get() {
             self.draw_cursor(&t, m);
         }
+        if live && let Some(text) = self.ivars().ime.marked() {
+            let (row, col) = t.cursor_pos();
+            let origin = NSPoint::new(PAD_X + col as f64 * m.cw, PAD_Y + row as f64 * m.ch);
+            let (fg, bg) = (self.color(theme.fg), self.color(theme.bg));
+            ime::draw_marked(&text, origin, m.cw, m.ch, t.cols.saturating_sub(col), &fg, &bg, &self.ivars().fonts.borrow()[0]);
+        }
     }
 
     fn draw_line(&self, t: &Term, line: &Line, y: f64, sel: Option<(usize, usize)>) {
@@ -740,6 +817,21 @@ impl TermView {
     // ---- input ----
 
     fn handle_key(&self, event: &NSEvent) {
+        let ime = &self.ivars().ime;
+        let chars = event.characters().map(|s| s.to_string()).unwrap_or_default();
+        if ime::wants(&chars, event.modifierFlags(), ime.has_marked())
+            && let Some(ctx) = self.inputContext()
+        {
+            ime.begin(event);
+            let handled = ctx.handleEvent(event);
+            if ime.take_event().is_none() || handled {
+                return;
+            }
+        }
+        self.send_key(event);
+    }
+
+    fn send_key(&self, event: &NSEvent) {
         let flags = event.modifierFlags();
         let mods = Mods {
             shift: flags.contains(NSEventModifierFlags::Shift),
@@ -774,6 +866,40 @@ impl TermView {
                     let _: () = unsafe { msg_send![super(self), keyDown: event] };
                 }
             }
+        }
+    }
+
+    /// Committed text from the input system (typing, dead keys, emoji picker, IME).
+    pub fn commit_text(&self, text: &str) {
+        self.ivars().ime.clear();
+        NSCursor::setHiddenUntilMouseMoves(true);
+        self.follow_output();
+        self.write(text.as_bytes());
+        self.setNeedsDisplay(true);
+    }
+
+    pub fn mark_text(&self, text: &str, selected: NSRange) {
+        if text.is_empty() {
+            self.ivars().ime.clear();
+        } else {
+            self.ivars().ime.set(text.to_string(), selected);
+            self.follow_output();
+        }
+        self.setNeedsDisplay(true);
+    }
+
+    /// Cursor cell (at the caret within marked text) in screen coordinates, for the candidate window.
+    fn ime_screen_rect(&self) -> NSRect {
+        let m = self.ivars().metrics.get();
+        let (row, col) = self.with_term(|t| t.cursor_pos()).unwrap_or((0, 0));
+        let col = col + self.ivars().ime.caret_cols();
+        let rect = NSRect::new(
+            NSPoint::new(PAD_X + col as f64 * m.cw, PAD_Y + row as f64 * m.ch),
+            NSSize::new(m.cw, m.ch),
+        );
+        match self.window() {
+            Some(w) => w.convertRectToScreen(self.convertRect_toView(rect, None)),
+            None => rect,
         }
     }
 

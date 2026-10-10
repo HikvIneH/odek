@@ -9,6 +9,15 @@ body:
       description: What you did, what you expected and what odek did instead. A screenshot helps.
     validations:
       required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The shortest way to make it happen again, if you know one
+      placeholder: |
+        1. Open a new tab with ⌘T
+        2. Run …
+        3. …
   - type: input
     id: version
     attributes:

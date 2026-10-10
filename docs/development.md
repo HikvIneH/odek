@@ -124,13 +124,5 @@ src/selftest.rs        scripted code viewer test
 
 ## Contributing
 
-Issues and pull requests are welcome. Before opening a PR:
-
-1. Run `cargo fmt`, `cargo clippy --all-targets -- -D warnings` (with and
-   without `--features selftest`) and `cargo test`; CI runs the same on macOS.
-2. For UI changes, run `scripts/termsnap.sh` or `scripts/selftest.sh` and check
-   the snapshots.
-3. Keep the footprint in mind: a feature that adds resident memory or startup
-   time needs a good reason, and the PR should say how much.
-4. [performance.md](performance.md) is the memory baseline: compare against it,
-   and update it when a change moves the numbers.
+Issues and pull requests are welcome; see
+[CONTRIBUTING.md](../CONTRIBUTING.md) for what to check before opening a PR.

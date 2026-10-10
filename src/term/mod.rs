@@ -14,6 +14,7 @@ mod settings;
 mod shortcuts;
 mod sidebar;
 mod target;
+mod update;
 pub mod view;
 pub mod vt;
 mod window;

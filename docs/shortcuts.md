@@ -106,3 +106,12 @@ which refuses rather than merging when your branch has diverged.
 Notifications for background tabs are off by default; turn them on in **View ▸ Notify When a
 Background Tab Needs Attention**. Claude Code rings the terminal bell when it
 finishes or needs input if its notification setting is the terminal bell.
+
+## Updates
+
+Once a day, when you switch to it, odek asks GitHub for its latest release
+(one request to `api.github.com`, nothing else is sent). When there's a newer
+version it says so once and the app menu shows **Update to Odek …**; Homebrew
+installs update with `brew upgrade --cask odek`. **Odek ▸ Check for Updates…**
+checks right away, and **Odek ▸ Check for Updates Automatically** turns the
+daily check off.

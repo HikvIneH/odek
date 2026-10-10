@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Tells you when a new version is out: a daily check of the latest GitHub
+  release, plus Odek ▸ Check for Updates… (turn the daily check off in the same
+  menu)
+
 ## 0.2.0 — 2026-10-10
 
 odek is now a terminal first, with the code viewer built in.

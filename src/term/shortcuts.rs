@@ -36,13 +36,17 @@ thread_local! {
     static PANEL: RefCell<Option<Retained<NSPanel>>> = const { RefCell::new(None) };
 }
 
-/// Show the panel beside the key window, or hide it if it's showing.
+/// Show the panel beside the key window, or close it if it's showing. Closed
+/// panels are dropped, so it holds no memory (window buffer, text) while hidden.
 pub fn toggle(mtm: MainThreadMarker) {
-    let panel = PANEL.with(|p| p.borrow_mut().get_or_insert_with(|| build(mtm)).clone());
-    if panel.isVisible() {
-        panel.orderOut(None);
+    if let Some(old) = PANEL.with(|p| p.borrow_mut().take())
+        && old.isVisible()
+    {
+        old.close();
         return;
     }
+    let panel = build(mtm);
+    PANEL.with(|p| *p.borrow_mut() = Some(panel.clone()));
     if let Some(text) = panel
         .contentView()
         .and_then(|c| c.subviews().firstObject())

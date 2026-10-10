@@ -20,7 +20,7 @@ use super::workspace::Id;
 
 const GROUP_H: f64 = 28.0;
 const TAB_H: f64 = 44.0;
-/// One line per pane under a split tab.
+/// The name caption over a split tab's panes.
 const PANE_H: f64 = 20.0;
 const TOP_BAR: f64 = 40.0;
 
@@ -39,7 +39,10 @@ pub enum Row {
         active: bool,
         attention: bool,
         running: bool,
-        /// The panes of a split tab, listed under it; empty when unsplit.
+        /// The user named the tab (shown as a caption over a split tab's panes).
+        named: bool,
+        /// The panes of a split tab, listed in place of the tab's own line;
+        /// empty when unsplit.
         panes: Vec<PaneRow>,
     },
 }
@@ -48,6 +51,7 @@ pub enum Row {
 pub struct PaneRow {
     pub id: Id,
     pub title: String,
+    pub subtitle: String,
     pub focused: bool,
     pub attention: bool,
     pub running: bool,
@@ -279,8 +283,9 @@ impl SidebarList {
             .borrow()
             .iter()
             .find_map(|(row, top)| match row {
-                Row::Tab { panes, .. } if panes.len() > 1 && y >= top + TAB_H - 2.0 => {
-                    let i = ((y - top - TAB_H + 2.0) / PANE_H).floor() as usize;
+                Row::Tab { panes, named, .. } if panes.len() > 1 => {
+                    let first = top + caption_h(*named);
+                    let i = ((y - first) / TAB_H).floor().max(0.0) as usize;
                     panes.get(i).map(|p| p.id)
                 }
                 _ => None,
@@ -335,7 +340,7 @@ impl SidebarList {
                         NSRect::new(NSPoint::new(10.0, top + 8.0), NSSize::new(12.0, 14.0)),
                         9.0,
                         false,
-                        &NSColor::tertiaryLabelColor(),
+                        &NSColor::secondaryLabelColor(),
                     );
                     let label = if *collapsed {
                         format!("{name}  ·  {count}")
@@ -347,7 +352,7 @@ impl SidebarList {
                         NSRect::new(NSPoint::new(24.0, top + 7.0), NSSize::new(width - 34.0, 16.0)),
                         11.5,
                         true,
-                        &NSColor::secondaryLabelColor(),
+                        &NSColor::labelColor(),
                     );
                 }
                 Row::Tab {
@@ -357,6 +362,7 @@ impl SidebarList {
                     active,
                     attention,
                     running,
+                    named,
                     panes,
                 } => {
                     let card = NSRect::new(
@@ -373,36 +379,29 @@ impl SidebarList {
                         fill.setFill();
                         NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(card, 7.0, 7.0).fill();
                     }
-                    let dot = if *attention {
-                        Some(NSColor::systemOrangeColor())
-                    } else if *running {
-                        Some(NSColor::systemGreenColor())
-                    } else {
-                        None
-                    };
-                    if let Some(color) = dot {
-                        color.setFill();
-                        let r = NSRect::new(NSPoint::new(17.0, top + 11.0), NSSize::new(7.0, 7.0));
-                        NSBezierPath::bezierPathWithOvalInRect(r).fill();
-                    }
                     let text_x = 32.0;
                     let text_w = width - text_x - 14.0;
-                    draw_text(
-                        title,
-                        NSRect::new(NSPoint::new(text_x, top + 6.0), NSSize::new(text_w, 17.0)),
-                        13.0,
-                        false,
-                        &NSColor::labelColor(),
-                    );
-                    draw_text(
-                        subtitle,
-                        NSRect::new(NSPoint::new(text_x, top + 23.0), NSSize::new(text_w, 15.0)),
-                        11.0,
-                        false,
-                        &NSColor::secondaryLabelColor(),
-                    );
                     if panes.len() > 1 {
-                        draw_panes(panes, top + TAB_H - 2.0, text_x, text_w);
+                        // A split tab: its panes, each a line like a tab's,
+                        // under the tab's name when it has one.
+                        if *named {
+                            draw_text(
+                                title,
+                                NSRect::new(NSPoint::new(text_x, top + 5.0), NSSize::new(text_w, 15.0)),
+                                11.0,
+                                true,
+                                &NSColor::secondaryLabelColor(),
+                            );
+                        }
+                        let first = top + caption_h(*named);
+                        for (i, p) in panes.iter().enumerate() {
+                            let y = first + i as f64 * TAB_H;
+                            let mark = Mark::of(*active && p.focused, p.attention, p.running);
+                            draw_line(&p.title, &p.subtitle, mark, y, text_x, text_w);
+                        }
+                    } else {
+                        let mark = Mark::of(*active, *attention, *running);
+                        draw_line(title, subtitle, mark, *top, text_x, text_w);
                     }
                 }
             }
@@ -422,34 +421,75 @@ impl SidebarList {
     }
 }
 
-/// A split tab's panes, one line each: a dot like the tab's, the title,
-/// brighter for the focused pane.
-fn draw_panes(panes: &[PaneRow], y0: f64, x: f64, w: f64) {
-    for (i, p) in panes.iter().enumerate() {
-        let y = y0 + i as f64 * PANE_H;
-        let dot = if p.attention {
-            NSColor::systemOrangeColor()
-        } else if p.running {
-            NSColor::systemGreenColor()
+/// What the dot before a tab or pane says.
+#[derive(Clone, Copy, PartialEq)]
+enum Mark {
+    /// The pane you're typing in: green.
+    Active,
+    /// Rang the bell or finished in the background: orange.
+    Attention,
+    /// A program (not the shell) is running: a hollow ring.
+    Running,
+    None,
+}
+
+impl Mark {
+    fn of(active: bool, attention: bool, running: bool) -> Mark {
+        if active {
+            Mark::Active
+        } else if attention {
+            Mark::Attention
+        } else if running {
+            Mark::Running
         } else {
-            NSColor::tertiaryLabelColor()
-        };
-        dot.setFill();
-        let r = NSRect::new(NSPoint::new(x + 2.0, y + 7.0), NSSize::new(5.0, 5.0));
-        NSBezierPath::bezierPathWithOvalInRect(r).fill();
-        let color = if p.focused {
-            NSColor::labelColor()
-        } else {
-            NSColor::secondaryLabelColor()
-        };
-        draw_text(
-            &p.title,
-            NSRect::new(NSPoint::new(x + 14.0, y + 2.0), NSSize::new(w - 14.0, 16.0)),
-            11.5,
-            false,
-            &color,
-        );
+            Mark::None
+        }
     }
+}
+
+/// One tab, or one pane of a split tab: dot, title, and the folder under it.
+fn draw_line(title: &str, subtitle: &str, mark: Mark, top: f64, x: f64, w: f64) {
+    let r = NSRect::new(NSPoint::new(17.0, top + 11.0), NSSize::new(7.0, 7.0));
+    match mark {
+        Mark::Active | Mark::Attention => {
+            let color = if mark == Mark::Active {
+                NSColor::systemGreenColor()
+            } else {
+                NSColor::systemOrangeColor()
+            };
+            color.setFill();
+            NSBezierPath::bezierPathWithOvalInRect(r).fill();
+        }
+        Mark::Running => {
+            NSColor::secondaryLabelColor().setStroke();
+            let ring = NSBezierPath::bezierPathWithOvalInRect(NSRect::new(
+                NSPoint::new(r.origin.x + 0.6, r.origin.y + 0.6),
+                NSSize::new(r.size.width - 1.2, r.size.height - 1.2),
+            ));
+            ring.setLineWidth(1.2);
+            ring.stroke();
+        }
+        Mark::None => {}
+    }
+    draw_text(
+        title,
+        NSRect::new(NSPoint::new(x, top + 6.0), NSSize::new(w, 17.0)),
+        13.0,
+        false,
+        &NSColor::labelColor(),
+    );
+    draw_text(
+        subtitle,
+        NSRect::new(NSPoint::new(x, top + 23.0), NSSize::new(w, 15.0)),
+        11.0,
+        false,
+        &NSColor::secondaryLabelColor(),
+    );
+}
+
+/// Height of a split tab's name caption (none when it isn't named).
+fn caption_h(named: bool) -> f64 {
+    if named { PANE_H } else { 0.0 }
 }
 
 /// Index of the group row that owns the tabs ending before `end`.
@@ -473,7 +513,7 @@ fn brand_blue() -> Retained<NSColor> {
 fn row_height(row: &Row) -> f64 {
     match row {
         Row::Group { .. } => GROUP_H,
-        Row::Tab { panes, .. } if panes.len() > 1 => TAB_H + panes.len() as f64 * PANE_H + 4.0,
+        Row::Tab { panes, named, .. } if panes.len() > 1 => caption_h(*named) + panes.len() as f64 * TAB_H,
         Row::Tab { .. } => TAB_H,
     }
 }

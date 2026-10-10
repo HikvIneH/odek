@@ -644,6 +644,7 @@ impl Workbench {
                             (Some(p), _) => PaneRow {
                                 id,
                                 title: pane_title(p),
+                                subtitle: p.cwd.as_deref().map(tilde).unwrap_or_default(),
                                 focused: id == t.focus,
                                 attention: p.attention,
                                 running: p.program.is_some(),
@@ -651,6 +652,7 @@ impl Workbench {
                             (None, Some(v)) if v.id == id => PaneRow {
                                 id,
                                 title: v.app.display_title(),
+                                subtitle: v.app.root_dir().as_deref().map(tilde).unwrap_or_default(),
                                 focused: id == t.focus,
                                 attention: false,
                                 running: false,
@@ -658,6 +660,7 @@ impl Workbench {
                             _ => PaneRow {
                                 id,
                                 title: String::new(),
+                                subtitle: String::new(),
                                 focused: false,
                                 attention: false,
                                 running: false,
@@ -674,6 +677,7 @@ impl Workbench {
                     active: ws.active == Some(t.id),
                     attention,
                     running,
+                    named: t.name.is_some(),
                     panes: pane_rows,
                 });
             }

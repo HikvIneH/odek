@@ -12,8 +12,17 @@ Grouped tabs, split panes and a built-in code viewer, native and light on memory
 </p>
 
 <p align="center">
-  <img src="docs/odek-window.png" width="860" alt="odek: a sidebar of tabs grouped by project, a terminal pane showing git history and files, and the code viewer showing Rust source beside it">
+  <img src="docs/odek-demo.gif" width="860" alt="odek in use: a command runs in a tab, a file opens in the code viewer beside the terminal, then the tests run in a second tab while you keep working in the first">
 </p>
+
+<p align="center">Run something in a tab, open the file it points at beside it, start a long job in<br>
+another tab and keep working: its dot shows while it runs and when it needs you.</p>
+
+```sh
+brew install --cask hikvineh/tap/odek
+```
+
+Apple Silicon, macOS 12 or later. More options under [Install](#install).
 
 ## Why
 
@@ -27,17 +36,11 @@ draw every character, a terminal cell takes 8 bytes, and scrollback has a hard
 cap. One idle shell uses about 38 MB and six busy panes about 70 MB; see
 [Performance](docs/performance.md).
 
-## How it works
+## Features
 
 <p align="center">
-  <img src="docs/odek-demo.gif" width="860" alt="odek in use: a command runs in a tab, a file opens in the code viewer beside the terminal, then the tests run in a second tab while you keep working in the first">
+  <img src="docs/odek-window.png" width="860" alt="odek: a sidebar of tabs grouped by project, a terminal pane showing git history and files, and the code viewer showing Rust source beside it">
 </p>
-
-Run something in a tab, open the file it points at in the code viewer beside
-it, and start a long job in another tab: its dot shows it's running, and you
-can keep working until it's done.
-
-## Features
 
 **Workspace**
 

@@ -92,6 +92,7 @@ define_class!(
         #[unsafe(method(applicationDidBecomeActive:))]
         fn did_become_active(&self, _n: &NSNotification) {
             self.with_bench(|b| b.app_activated());
+            super::update::on_activate();
         }
 
         #[unsafe(method(applicationShouldTerminate:))]
@@ -281,6 +282,20 @@ define_class!(
         fn menu_toggle_notify(&self, sender: Option<&NSMenuItem>) {
             let on = !super::notify::enabled();
             super::notify::set_enabled(on);
+            if let Some(item) = sender {
+                item.setState(if on { NSControlStateValueOn } else { 0 });
+            }
+        }
+
+        #[unsafe(method(termCheckUpdates:))]
+        fn menu_check_updates(&self, _sender: Option<&AnyObject>) {
+            super::update::check_now();
+        }
+
+        #[unsafe(method(termToggleAutoUpdate:))]
+        fn menu_toggle_auto_update(&self, sender: Option<&NSMenuItem>) {
+            let on = !super::update::auto_enabled();
+            super::update::set_auto_enabled(on);
             if let Some(item) = sender {
                 item.setState(if on { NSControlStateValueOn } else { 0 });
             }
@@ -498,6 +513,17 @@ impl TermApp {
         if super::notify::enabled() {
             notify.setState(NSControlStateValueOn);
         }
+        let check_updates = item(super::update::CHECK_TITLE, Some(sel!(termCheckUpdates:)), "", cmd);
+        super::update::set_menu_item(check_updates.clone());
+        let auto_update = item(
+            "Check for Updates Automatically",
+            Some(sel!(termToggleAutoUpdate:)),
+            "",
+            cmd,
+        );
+        if super::update::auto_enabled() {
+            auto_update.setState(NSControlStateValueOn);
+        }
         let next_file = item("Next File", Some(sel!(appNextTab:)), "\t", ctrl);
         let prev_file = item("Previous File", Some(sel!(appPrevTab:)), "\t", ctrl | shift);
         let bar = NSMenu::new(mtm);
@@ -511,6 +537,8 @@ impl TermApp {
                         "",
                         cmd,
                     ),
+                    check_updates,
+                    auto_update,
                     sep(),
                     item("Settings…", Some(sel!(termSettings:)), ",", cmd),
                     sep(),

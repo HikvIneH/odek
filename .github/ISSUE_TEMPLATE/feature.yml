@@ -1,0 +1,11 @@
+name: Feature request
+description: Something odek could do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What you'd like
+      description: What you're trying to do and how odek could help. odek aims to stay small, so say what you'd use it for.
+    validations:
+      required: true

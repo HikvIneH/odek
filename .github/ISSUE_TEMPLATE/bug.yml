@@ -1,0 +1,32 @@
+name: Bug report
+description: Something in odek doesn't work as it should
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected and what odek did instead. A screenshot helps.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: odek version
+      description: Odek ▸ About Odek
+      placeholder: "0.2.0"
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: "macOS 26.0"
+    validations:
+      required: true
+  - type: input
+    id: shell
+    attributes:
+      label: Shell and program
+      description: The shell, prompt (oh-my-zsh, powerlevel10k…) and program running when it happened, if it's a terminal problem
+      placeholder: "zsh + powerlevel10k, running Claude Code"

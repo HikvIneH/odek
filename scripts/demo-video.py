@@ -20,71 +20,178 @@ live = bool(os.environ.get("LIVE"))  # record the real window on screen (needs S
 base = "/tmp/odek-demo"
 demo, site = f"{base}/odek", f"{base}/website"
 tmp = tempfile.mkdtemp(prefix="odek-video-")
-agent, agent_sh, trigger = f"{tmp}/claude", f"{tmp}/agent.sh", f"{tmp}/ask"
+agent, agent_py, trigger = f"{tmp}/claude", f"{tmp}/agent.py", f"{tmp}/ask"
 
-# A pretend Claude Code session: reads, edits and runs something with a spinner
-# in between, then keeps working, or (given a commit message) waits for the
-# trigger file, rings the bell and asks permission to commit.
-AGENT_SH = r"""# agent.sh <task> <step seconds> <also read> <file> <adds> <removes> <run> <result> [commit message]
-task=$1 step=$2 also=$3 file=$4 adds=$5 dels=$6 run=$7 result=$8 commit=$9
-coral=$'\e[38;2;215;119;87m' green=$'\e[38;2;78;186;101m' purple=$'\e[38;2;177;185;249m'
-grey=$'\e[38;2;153;153;153m' bold=$'\e[1m' off=$'\e[0m'
-glyphs=(· ✢ ✳ ✶ ✻ ✽ ✻ ✶ ✳ ✢)
-n=$(awk "BEGIN { print int($step / 0.15) }")
-t0=$SECONDS
-spin() {  # spin <frames | wait> <verb>
-  local i=0
-  while :; do
-    if [ "$1" = wait ]; then [ -e TRIGGER ] && break; elif [ $i -ge "$1" ]; then break; fi
-    printf '\r\e[K%s%s %s…%s %s(%ds · esc to interrupt)%s' "$coral" "${glyphs[i % 10]}" "$2" "$off" \
-      "$grey" $((SECONDS - t0)) "$off"
-    sleep 0.15; i=$((i + 1))
-  done
-  printf '\r\e[K'
+# A pretend Claude Code session, drawn the way Claude Code (light theme) draws
+# itself: header, task bar, an edit shown as a diff, steps that collapse into a
+# summary, the spinner and the input box pinned to the bottom. It sets the tab
+# title like Claude does, and either keeps working or (given a commit message)
+# waits for the trigger file, rings the bell and asks permission to commit.
+# The screen is redrawn every tick, so it reflows when the pane is resized.
+AGENT_PY = r'''import os, random, re, select, subprocess, sys, termios, time, tty
+
+title, task, step, also, file, run, result, commit = (sys.argv[1:] + [""])[:8]
+step = float(step)
+E = "\x1b["
+rgb = lambda c, bg=False: f"{E}{48 if bg else 38};2;{c}m"
+CORAL, GREY, BLUE, GREEN = rgb("215;119;87"), rgb("110;110;110"), rgb("87;105;247"), rgb("44;160;44")
+FG, BOLD, OFF = E + "39m", E + "1m", E + "0m"
+BAR, MINUS, PLUS = rgb("236;236;236", True), rgb("255;220;224", True), rgb("218;250;218", True)
+MASCOT = (" ▐▛███▜▌ ", "▝▜█████▛▘", "  ▘▘ ▝▝  ")
+GLYPHS, MOONS = "·✢✳✶✻✽✻✶✳✢", "◐◓◑◒"
+TRIGGER = "TRIGGER_PATH"
+TIP = "Tip: Use ctrl+v to paste images from your clipboard"
+DIFFS = {
+    "src/term/vt.rs": (281, ["  let keep = self.prompt_rows();",
+                             "- let prompt_row = self.reflow_main(cols, rows, keep);",
+                             "+ let prompt_row = self.reflow_main(cols, rows, keep)",
+                             "+     .or_else(|| self.live_prompt_row());",
+                             "  // Old marks pointed at lines that moved."]),
+    "src/highlight.rs": (118, ['  "yaml" | "yml" => Lang::Yaml,',
+                               '+ "toml" => Lang::Toml,',
+                               "  _ => return None,"]),
+    "index.html": (14, ['  <a class="cta" href="#install">',
+                        "-   Install",
+                        "+   Download for macOS",
+                        "  </a>"]),
 }
-tool() { printf '%s⏺%s %s%s%s(%s)\n  %s⎿  %s%s\n\n' "$green" "$off" "$bold" "$1" "$off" "$2" "$grey" "$3" "$off"; }
-rule() { printf '%s%s%s\n' "$1" "$(printf '─%.0s' $(seq 1 48))" "$off"; }
+t0, tokens, content, tick = time.time(), 0, [], 0
 
-printf '\e[?25l\e[H\e[2J\n%s> %s%s\n\n' "$grey" "$task" "$off"
-spin "$n" Pondering
-tool Read "$file" "Read $(wc -l < "$file" | tr -d ' ') lines"
-tool Read "$also" "Read $(wc -l < "$also" | tr -d ' ') lines"
-spin "$n" Cogitating
-tool Update "$file" "Updated with $adds additions and $dels removals"
-spin "$n" Noodling
-tool Bash "$run" "$result"
-if [ -z "$commit" ]; then spin 99999 Pondering; exit; fi
-spin wait Clauding
-printf '\a'
-rule "$purple"
-printf ' %sBash command%s\n\n   git commit -m "%s"\n\n' "$bold$purple" "$off" "$commit"
-printf ' Do you want to proceed?\n %s❯ 1. Yes%s\n   2. No, and tell Claude what to do\n      differently (esc)\n' "$purple" "$off"
-read -rsn1 answer
-printf '\e[9A\e[J'
-git commit -q --allow-empty -m "$commit"
-tool Bash "git commit -m \"$commit\"" "[main $(git rev-parse --short HEAD)] $commit"
-printf '%s⏺%s Committed. The prompt now stays put when\n  the window narrows.\n\n' "$off" "$off"
-rule "$grey"
-printf '%s>%s\n' "$grey" "$off"
-rule "$grey"
-sleep 600
-""".replace("TRIGGER", trigger)
+
+def plain(s):
+    return re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", s)
+
+
+def fit(s, cols):
+    # Cut a styled line to the width, keeping its escape codes.
+    out, n = [], 0
+    for tok in re.findall(r"\x1b\[[0-9;?]*[A-Za-z]|.", s):
+        if tok.startswith("\x1b"):
+            out.append(tok)
+        elif n < cols:
+            out.append(tok)
+            n += 1
+    return "".join(out)
+
+
+def diff_block(cols):
+    first, lines = DIFFS[file]
+    width = min(cols - 8, 64)
+    out, n = [], first
+    for line in lines:
+        mark, text = line[0], line[2:]
+        num = f"{n:>5} " if mark != "-" else "      "
+        body = f"{mark}{text}"[:width].ljust(width)
+        bg = MINUS if mark == "-" else PLUS if mark == "+" else ""
+        out.append(f"    {GREY}{num}{OFF}{bg}{body}{OFF}")
+        n += mark != "-"
+    return out
+
+
+def draw(spinner=None, tip=False, dialog=False):
+    global tick
+    tick += 1
+    cols, rows = os.get_terminal_size()
+    glyph = "✳" if spinner is None else MOONS[tick // 2 % 4]
+    head = [f"{BOLD}Claude Code{OFF} {GREY}v2.1.296{OFF}", f"{GREY}Opus 5.5 with medium effort · Claude Max{OFF}",
+            f"{GREY}{os.getcwd()}{OFF}"]
+    top = ["", *(f" {CORAL}{m}{OFF}  {h}" for m, h in zip(MASCOT, head)), "", ""]
+    bar = f"{GREY}❯ {FG}{task}"
+    top += [f"{BAR}{bar}{' ' * max(0, cols - len(plain(bar)))}{OFF}", ""]
+    for item in content:
+        top += diff_block(cols) if item == "DIFF" else [item]
+    if dialog:
+        dash = f"{GREY}{'╌' * cols}{OFF}"
+        top += ["", f"{BLUE}{'─' * cols}{OFF}", f" {BLUE}{BOLD}Bash command{OFF}",
+                f" {GREY}Commit the fix{OFF}", dash, f' git commit -m "{commit}"', dash,
+                " This command requires approval", "", " Do you want to proceed?",
+                f" {BLUE}❯{OFF} {GREY}1.{OFF} {BLUE}Yes{OFF}",
+                f"   {GREY}2.{OFF} Yes, and don’t ask again for: git commit *",
+                f"   {GREY}3.{OFF} No", "", f" {GREY}Esc to cancel · Tab to amend{OFF}"]
+        bottom = []
+    else:
+        rule = f"{GREY}{'─' * cols}{OFF}"
+        bottom = [spinner or "", f"  {GREY}⎿  {TIP}{OFF}" if tip else "", "", rule,
+                  f"{GREY}❯{OFF} {E}7m {OFF}", rule, f"  {GREY}? for shortcuts{OFF}"]
+    screen = [""] * rows
+    for i, line in enumerate(top[:rows]):
+        screen[i] = line
+    for i, line in enumerate(bottom):
+        screen[rows - len(bottom) + i] = line
+    sys.stdout.write(f"\x1b]0;{glyph} {title}\x07\x1b[?25l"
+                     + "".join(f"{E}{r + 1};1H{fit(l, cols)}{OFF}{E}K" for r, l in enumerate(screen)))
+    sys.stdout.flush()
+
+
+def spin(verb, seconds=None, until=None, tip=False):
+    global tokens
+    i = 0
+    while (seconds is None or i * 0.15 < seconds) and not (until and until()):
+        tokens += random.randint(15, 60)
+        draw(f"{CORAL}{GLYPHS[i % len(GLYPHS)]} {verb}…{OFF} {GREY}({int(time.time() - t0)}s · ↓ {tokens} tokens){OFF}",
+             tip=tip)
+        time.sleep(0.15)
+        i += 1
+
+
+def working(doing, detail):
+    return [f"{GREY}●{OFF} {doing}", f"  {GREY}⎿  {detail}{OFF}"]
+
+
+def summary(text):
+    return [f"  {GREY}{text}{OFF}", ""]
+
+
+name = os.path.basename(file)
+spin("Pondering", step)
+content[:] = working("Reading 2 files…", f"{file}, {also}")
+spin("Reading", step)
+content[:] = summary("Read 2 files") + [f"{GREEN}●{OFF} {BOLD}Update{OFF}({file})", "DIFF", ""]
+spin("Cogitating", step * 1.4, tip=bool(commit))
+edited = content[2:]
+content[:] = summary("Read 2 files") + edited + working(f"Running {run}…", f"$ {run}")
+spin("Noodling", step)
+content[:] = edited + summary("Read 2 files, ran 1 shell command") + [f"{FG}●{OFF} {result}"]
+if not commit:
+    content += [""]
+    spin("Pondering")
+spin("Pondering", until=lambda: os.path.exists(TRIGGER))
+sys.stdout.write("\a")
+old = termios.tcgetattr(0)
+tty.setcbreak(0)
+try:
+    while True:
+        draw(dialog=True)
+        if select.select([0], [], [], 0.15)[0] and os.read(0, 16) in (b"\r", b"\n", b"1"):
+            break
+finally:
+    termios.tcsetattr(0, termios.TCSADRAIN, old)
+subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", commit])
+head = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
+content[:] = edited + summary("Read 2 files, ran 2 shell commands") + [
+    f"{FG}●{OFF} Committed {BLUE}{head}{OFF}. {result}", "",
+    f"{GREY}✻ Crunched for {int(time.time() - t0)}s{OFF}"]
+while True:
+    draw()
+    time.sleep(0.15)
+'''.replace("TRIGGER_PATH", trigger)
 
 # Started through a tiny launcher named "claude": odek doesn't count shells as
-# running programs, and the pane title shows the program's name.
+# running programs, and the pane shows the program's name until a title is set.
 AGENT_C = r"""#include <unistd.h>
 #include <sys/wait.h>
 int main(int argc, char **argv) {
     char *args[argc + 2];
-    args[0] = "/bin/bash";
-    args[1] = "AGENT_SH";
+    args[0] = "PYTHON";
+    args[1] = "AGENT_PY";
     for (int i = 1; i <= argc; i++) args[i + 1] = argv[i];  /* argv[argc] is NULL */
     pid_t pid = fork();
     if (pid == 0) execv(args[0], args);
     waitpid(pid, 0, 0);
     return 0;
 }
-""".replace("AGENT_SH", agent_sh)
+""".replace("PYTHON", sys.executable).replace("AGENT_PY", agent_py)
+
 
 steps, frames = [], []  # frames: (name, seconds on screen; 0 = only if it changed, caption)
 caption = ""
@@ -120,16 +227,19 @@ def run(cmd, hold_secs=2.0):
 
 
 # Setup, before the first frame: two projects, four tabs.
-steps += ["appearance dark", "setting terminalTheme Dark", "renamegroup odek", "rename reflow fix",
-          f"line {agent} 'Fix reflow when the window narrows' 0.9 src/term/grid.rs src/term/vt.rs "
-          "12 3 'cargo test -q' 'test result: ok. 214 passed' 'Keep prompt marks on reflow'",
-          "newtab", "rename toml highlighting",
-          f"line {agent} 'Highlight TOML in the code viewer' 1.4 Cargo.toml src/highlight.rs "
-          "9 0 'cargo build --release' 'Finished release in 38.2s'",
+# The look of a usual odek: system light/dark, translucent with blur. The agents
+# name their own tabs, as Claude Code does.
+SETTINGS = {"terminalTheme": "System", "terminalOpacity": "82", "terminalBlur": "1"}
+steps += ["appearance light", *(f"setting {k} {v}" for k, v in SETTINGS.items()), "renamegroup odek",
+          f"line {agent} 'Reflow fix' 'Fix reflow when the window narrows' 0.9 src/term/grid.rs "
+          "src/term/vt.rs 'cargo test -q' 'All 214 tests pass.' 'Keep prompt marks on reflow'",
+          "newtab",
+          f"line {agent} 'TOML highlighting' 'Highlight TOML in the code viewer' 1.4 Cargo.toml "
+          "src/highlight.rs 'cargo build --release' 'The release build finished.'",
           "newtab", "rename zsh",
-          "newtab", "group website", "rename landing page",
-          f"line cd {site} && {agent} 'Add a download button' 1.2 styles.css index.html "
-          "6 1 'npm run build' 'built in 1.4s'",
+          "newtab", "group website",
+          f"line cd {site} && {agent} 'Download button' 'Add a download button' 1.2 styles.css "
+          "index.html 'npm run build' 'The build passes.'",
           "newtab", "rename dev server",
           f"line cd {site} && python3 -m http.server 8080",
           "wait 0.8", "nexttab", "wait 0.3"]
@@ -171,13 +281,13 @@ caption = "And check its commit from your shell"
 steps += ["nexttab", "wait 0.2", "nexttab", "wait 0.4"]
 snap(0.6)
 run("git log --oneline -3", hold_secs=3.4)
-steps += ["setting terminalTheme", "quit"]
+steps += [*(f"setting {k}" for k in SETTINGS), "quit"]
 
 # The projects the agents work in: a clone of this repo and a tiny website.
 shots, zdot, cards = f"{tmp}/shots", f"{tmp}/zdot", f"{tmp}/cards"
 for d in (shots, zdot, cards):
     os.makedirs(d)
-for path, text in ((agent_sh, AGENT_SH), (f"{tmp}/claude.c", AGENT_C)):
+for path, text in ((agent_py, AGENT_PY), (f"{tmp}/claude.c", AGENT_C)):
     with open(path, "w") as f:
         f.write(text)
 subprocess.run(["cc", "-O", "-o", agent, f"{tmp}/claude.c"], check=True)
@@ -199,9 +309,13 @@ for name, lines in (("index.html", 86), ("styles.css", 142)):
     with open(f"{site}/{name}", "w") as f:
         f.write("\n" * lines)
 
+# Your own zsh and prompt (MY_PROMPT=0 for a plain one), but nothing from this
+# Claude Code session.
 env = dict(
-    os.environ,
-    ZDOTDIR=zdot,
+    {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE", "ANTHROPIC"))},
+    GIT_PAGER="cat",
+    PAGER="cat",
+    **({} if os.environ.get("MY_PROMPT", "1") == "1" else {"ZDOTDIR": zdot}),
     ODEK_TERM_WS="1",
     ODEK_WORKSPACE_FILE=f"{tmp}/ws.txt",
     ODEK_TERM_SNAP=shots,

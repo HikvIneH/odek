@@ -259,6 +259,13 @@ impl Workspace {
             let rest: Vec<Id> = order.into_iter().filter(|&t| t != tab).collect();
             self.active = rest.get(i.min(rest.len().saturating_sub(1))).copied();
         }
+        self.drop_empty_groups();
+    }
+
+    /// A group lives only while it holds tabs: an empty one has nothing to
+    /// select, so neither ⌘1…⌘9 nor ⌘T could reach it.
+    fn drop_empty_groups(&mut self) {
+        self.groups.retain(|g| !g.tabs.is_empty());
     }
 
     /// Move a tab into `group` at `index` (clamped).
@@ -279,6 +286,7 @@ impl Workspace {
         }
         let tabs = &mut self.groups[gi].tabs;
         tabs.insert(at.min(tabs.len()), t);
+        self.drop_empty_groups();
     }
 
     /// Delete a group; its tabs move to the neighbouring group (none if it's the last).
@@ -353,6 +361,8 @@ impl Workspace {
                 }
             }
         }
+        // Older versions saved groups left empty by closing their last tab.
+        ws.drop_empty_groups();
         if ws.active.is_none() {
             ws.active = ws.tabs().first().copied();
         }
@@ -465,12 +475,23 @@ mod tests {
             ws.groups[0].tabs.iter().map(|t| t.id).collect::<Vec<_>>(),
             [t2, t1]
         );
-        assert!(ws.groups[1].tabs.is_empty());
+        assert_eq!(ws.groups.len(), 1, "the emptied group goes away");
         ws.move_tab(t2, work, 2);
         assert_eq!(
             ws.groups[0].tabs.iter().map(|t| t.id).collect::<Vec<_>>(),
             [t1, t2]
         );
+    }
+
+    #[test]
+    fn empty_groups_go_away() {
+        let (mut ws, t2, _) = sample();
+        ws.remove_tab(t2);
+        assert_eq!(ws.groups.len(), 1, "closing a group's last tab drops it");
+        let text = "odek-workspace 1\ngroup 0 Left over\ngroup 0 Main\n  tab 1 \n    pane 1 /tmp\n";
+        let (ws, _) = Workspace::load(text).unwrap();
+        assert_eq!(ws.groups.len(), 1);
+        assert_eq!(ws.groups[0].name, "Main");
     }
 
     #[test]

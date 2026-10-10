@@ -16,6 +16,7 @@ import hashlib, os, re, shutil, subprocess, sys, tempfile, time
 root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 out_mp4 = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else f"{root}/target/odek-demo.mp4")
 captions = bool(os.environ.get("CAPTIONS"))
+live = bool(os.environ.get("LIVE"))  # record the real window on screen (needs Screen Recording)
 base = "/tmp/odek-demo"
 demo, site = f"{base}/odek", f"{base}/website"
 tmp = tempfile.mkdtemp(prefix="odek-video-")
@@ -90,6 +91,9 @@ caption = ""
 
 
 def snap(secs):
+    if live:  # the screen recording sees it; just let it stay on screen
+        steps.append(f"wait {secs}")
+        return
     name = f"f{len(frames):03d}"
     steps.append(f"snapws {name}")
     frames.append((name, secs, caption))
@@ -97,6 +101,9 @@ def snap(secs):
 
 def hold(seconds, every=0.5):
     # Keep snapping while things happen on their own (agents printing).
+    if live:
+        steps.append(f"wait {seconds}")
+        return
     for _ in range(int(seconds / every)):
         steps.append(f"wait {every}")
         snap(every)
@@ -105,8 +112,9 @@ def hold(seconds, every=0.5):
 def run(cmd, hold_secs=2.0):
     # Type a command into the shell a key at a time, then run it.
     for chunk in re.findall(r" *[^ ]", cmd):  # step lines are trimmed
-        steps.extend([f"keys {chunk}", "wait 0.03"])
-        snap(0.055)
+        steps.extend([f"keys {chunk}", "wait 0.07" if live else "wait 0.03"])
+        if not live:
+            snap(0.055)
     steps.extend(["keys \\r", "wait 0.6"])
     snap(hold_secs)
 
@@ -139,6 +147,7 @@ hold(2.5)
 caption = "A dot turns orange when an agent needs you"
 ringed = caption
 ask_at = len(frames)  # the question is released as this frame is reached
+ask_step = len(steps)  # or, live, when the steps get this far
 steps.append("wait 0.8")
 hold(3.5)
 
@@ -197,7 +206,57 @@ env = dict(
     ODEK_WORKSPACE_FILE=f"{tmp}/ws.txt",
     ODEK_TERM_SNAP=shots,
     ODEK_TERM_STEPS="\n".join(steps),
+    **({"ODEK_TERM_LIVE": "1"} if live else {}),
 )
+def waits(lines):
+    return sum(float(s.split()[1]) for s in lines if s.startswith("wait "))
+
+
+WINDOW_BOUNDS = r"""
+import CoreGraphics
+let pid = Int(CommandLine.arguments[1])!
+let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as! [[String: Any]]
+for w in list where (w[kCGWindowOwnerPID as String] as? Int) == pid && (w[kCGWindowLayer as String] as? Int) == 0 {
+    let b = w[kCGWindowBounds as String] as! [String: Any]
+    print("\(b["X"]!),\(b["Y"]!),\(b["Width"]!),\(b["Height"]!)")
+    break
+}
+"""
+
+if live:
+    # Real time on a real window: the screen recording is the video.
+    setup = waits(steps[:steps.index("wait 0.8") + 3])
+    total = waits(steps)
+    with open(f"{tmp}/bounds.swift", "w") as f:
+        f.write(WINDOW_BOUNDS)
+    start = time.time()
+    odek = subprocess.Popen([f"{root}/target/release/odek", "--term", demo], env=env, stdout=subprocess.DEVNULL)
+    rect = ""
+    while not rect and time.time() - start < 10:
+        time.sleep(0.2)
+        rect = subprocess.run(["swift", f"{tmp}/bounds.swift", str(odek.pid)], capture_output=True,
+                              text=True).stdout.strip()
+    if not rect:
+        sys.exit("odek's window never appeared")
+    mov = f"{tmp}/screen.mov"
+    rec = subprocess.Popen(["screencapture", "-v", "-x", "-R", rect, "-V", str(int(total + 4)), mov])
+    began = time.time() - start
+    time.sleep(max(0, start + waits(steps[:ask_step]) + 1.0 - time.time()))
+    open(trigger, "w").close()
+    odek.wait()
+    rec.wait()
+    subprocess.run(
+        ["ffmpeg", "-loglevel", "error", "-y", "-ss", f"{max(0, setup + 1.0 - began):.2f}", "-i", mov,
+         "-t", f"{total - setup:.2f}", "-vf", "scale=1600:-2:flags=lanczos,fps=30,format=yuv420p",
+         "-c:v", "libx264", "-crf", "18", "-movflags", "+faststart", out_mp4],
+        check=True,
+    )
+    print({"mp4": out_mp4, "window": rect, "seconds": round(total - setup, 1)})
+    if not os.environ.get("KEEP"):
+        shutil.rmtree(tmp)
+        shutil.rmtree(base, ignore_errors=True)
+    sys.exit()
+
 odek = subprocess.Popen([f"{root}/target/release/odek", "--term", demo], env=env, stdout=subprocess.DEVNULL)
 # Snapshots take real time, so release the question by frame, not by clock.
 while odek.poll() is None and not os.path.exists(f"{shots}/f{ask_at - 1:03d}.png"):

@@ -801,7 +801,12 @@ mod snap {
             bench
                 .window
                 .setContentSize(objc2_foundation::NSSize::new(1200.0, 700.0));
-            bench.start(Some(dir), false);
+            // ODEK_TERM_LIVE=1: show the window too, for recording the screen.
+            let live = std::env::var_os("ODEK_TERM_LIVE").is_some();
+            bench.start(Some(dir), live);
+            if live {
+                objc2_app_kit::NSApplication::sharedApplication(app.mtm()).activate();
+            }
             let view = bench.focused_term().unwrap();
             let _ = app.ivars().bench.set(bench);
             view

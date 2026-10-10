@@ -27,6 +27,16 @@ draw every character, a terminal cell takes 8 bytes, and scrollback has a hard
 cap. One idle shell uses about 38 MB and six busy panes about 70 MB; see
 [Performance](docs/performance.md).
 
+## How it works
+
+<p align="center">
+  <img src="docs/odek-demo.gif" width="860" alt="odek in use: a command runs in a tab, a file opens in the code viewer beside the terminal, then the tests run in a second tab while you keep working in the first">
+</p>
+
+Run something in a tab, open the file it points at in the code viewer beside
+it, and start a long job in another tab: its dot shows it's running, and you
+can keep working until it's done.
+
 ## Features
 
 **Workspace**

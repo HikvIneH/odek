@@ -22,6 +22,9 @@ ODEK_TERM_WS=1 ODEK_WORKSPACE_FILE=/tmp/ws.txt scripts/termsnap.sh <out-dir> <st
 scripts/selftest.sh target/release/odek <project> <out-dir> <query> <file>...
 ```
 
+The README animation is recorded the same way: `scripts/demo-gif.py` (needs
+`ffmpeg`) rewrites `docs/odek-demo.gif`.
+
 `scripts/install-term-preview.sh` installs a build as a separate
 `Odek Terminal Preview.app`, to try a branch without replacing `Odek.app`.
 

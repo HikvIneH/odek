@@ -939,6 +939,16 @@ mod snap {
                 std::fs::write(out.join(format!("{arg}.txt")), view.all_text()).ok();
             }
             "settings" => super::super::settings::show(app_mtm()),
+            // appearance light|dark: force the window chrome, whatever the system uses.
+            "appearance" => {
+                let name = if arg == "light" {
+                    unsafe { objc2_app_kit::NSAppearanceNameAqua }
+                } else {
+                    unsafe { objc2_app_kit::NSAppearanceNameDarkAqua }
+                };
+                objc2_app_kit::NSApplication::sharedApplication(app_mtm())
+                    .setAppearance(objc2_app_kit::NSAppearance::appearanceNamed(name).as_deref());
+            }
             // menukey <char> [ctrl|opt|shift|cmd …]: a real key event through the menus.
             "menukey" => {
                 let mut parts = arg.split_whitespace();

@@ -11,7 +11,7 @@ it, read the line it changed beside the terminal and let it carry on. The
 agents are a small shell script that prints what an agent would, so the run is
 the same every time. Needs git and ffmpeg, plus Pillow for captions.
 """
-import hashlib, os, shutil, subprocess, sys, tempfile, time
+import hashlib, os, re, shutil, subprocess, sys, tempfile, time
 
 root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 out_mp4 = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else f"{root}/target/odek-demo.mp4")
@@ -19,37 +19,71 @@ captions = bool(os.environ.get("CAPTIONS"))
 base = "/tmp/odek-demo"
 demo, site = f"{base}/odek", f"{base}/website"
 tmp = tempfile.mkdtemp(prefix="odek-video-")
-agent, agent_sh, trigger = f"{tmp}/agent", f"{tmp}/agent.sh", f"{tmp}/ask"
+agent, agent_sh, trigger = f"{tmp}/claude", f"{tmp}/agent.sh", f"{tmp}/ask"
 
-# A pretend coding agent: works through a few steps and keeps going, or (with
-# a question) waits for the trigger file, rings the bell and asks.
-AGENT_SH = r"""# agent.sh <task> <step seconds> <also read> <file:line> <change> <run> <result> [question]
-task=$1 step=$2 also=$3 edit=$4 change=$5 run=$6 result=$7 question=$8
-dim=$'\e[2m' cyan=$'\e[36m' green=$'\e[32m' yellow=$'\e[33m' bold=$'\e[1m' off=$'\e[0m'
-printf '\e[H\e[2J'
-printf '\n %s◆ Task%s  %s\n\n' "$bold" "$off" "$task"
-say() { sleep "$step"; printf ' %s●%s %s\n' "$cyan" "$off" "$1"; }
-say "Read ${edit%%:*}"
-say "Read $also"
-sleep "$step"; printf ' %s✻ Thinking…%s\n' "$dim" "$off"
-say "Edit $edit  $dim$change$off"
-say "Run  $run"
-sleep "$step"; printf '   %s✓ %s%s\n' "$green" "$result" "$off"
-if [ -z "$question" ]; then
-  sleep "$step"; printf ' %s✻ Thinking…%s\n' "$dim" "$off"
-  sleep 600; exit
-fi
-until [ -e TRIGGER ]; do sleep 0.1; done
-printf '\n %s?%s %s %s(y/n)%s ' "$yellow" "$off" "$question" "$dim" "$off"
+# A pretend Claude Code session: reads, edits and runs something with a spinner
+# in between, then keeps working, or (given a commit message) waits for the
+# trigger file, rings the bell and asks permission to commit.
+AGENT_SH = r"""# agent.sh <task> <step seconds> <also read> <file> <adds> <removes> <run> <result> [commit message]
+task=$1 step=$2 also=$3 file=$4 adds=$5 dels=$6 run=$7 result=$8 commit=$9
+coral=$'\e[38;2;215;119;87m' green=$'\e[38;2;78;186;101m' purple=$'\e[38;2;177;185;249m'
+grey=$'\e[38;2;153;153;153m' bold=$'\e[1m' off=$'\e[0m'
+glyphs=(· ✢ ✳ ✶ ✻ ✽ ✻ ✶ ✳ ✢)
+n=$(awk "BEGIN { print int($step / 0.15) }")
+t0=$SECONDS
+spin() {  # spin <frames | wait> <verb>
+  local i=0
+  while :; do
+    if [ "$1" = wait ]; then [ -e TRIGGER ] && break; elif [ $i -ge "$1" ]; then break; fi
+    printf '\r\e[K%s%s %s…%s %s(%ds · esc to interrupt)%s' "$coral" "${glyphs[i % 10]}" "$2" "$off" \
+      "$grey" $((SECONDS - t0)) "$off"
+    sleep 0.15; i=$((i + 1))
+  done
+  printf '\r\e[K'
+}
+tool() { printf '%s⏺%s %s%s%s(%s)\n  %s⎿  %s%s\n\n' "$green" "$off" "$bold" "$1" "$off" "$2" "$grey" "$3" "$off"; }
+rule() { printf '%s%s%s\n' "$1" "$(printf '─%.0s' $(seq 1 48))" "$off"; }
+
+printf '\e[?25l\e[H\e[2J\n%s> %s%s\n\n' "$grey" "$task" "$off"
+spin "$n" Pondering
+tool Read "$file" "Read $(wc -l < "$file" | tr -d ' ') lines"
+tool Read "$also" "Read $(wc -l < "$also" | tr -d ' ') lines"
+spin "$n" Cogitating
+tool Update "$file" "Updated with $adds additions and $dels removals"
+spin "$n" Noodling
+tool Bash "$run" "$result"
+if [ -z "$commit" ]; then spin 99999 Pondering; exit; fi
+spin wait Clauding
 printf '\a'
-read -r answer
-printf '\n %s●%s Commit 3f2a1c4  %sKeep prompt marks on reflow%s\n' "$cyan" "$off" "$dim" "$off"
-printf '   %s✓ Done%s\n\n' "$green" "$off"
+rule "$purple"
+printf ' %sBash command%s\n\n   git commit -m "%s"\n\n' "$bold$purple" "$off" "$commit"
+printf ' Do you want to proceed?\n %s❯ 1. Yes%s\n   2. No, and tell Claude what to do\n      differently (esc)\n' "$purple" "$off"
+read -rsn1 answer
+printf '\e[9A\e[J'
+git commit -q --allow-empty -m "$commit"
+tool Bash "git commit -m \"$commit\"" "[main $(git rev-parse --short HEAD)] $commit"
+printf '%s⏺%s Committed. The prompt now stays put when\n  the window narrows.\n\n' "$off" "$off"
+rule "$grey"
+printf '%s>%s\n' "$grey" "$off"
+rule "$grey"
+sleep 600
 """.replace("TRIGGER", trigger)
 
-# Started through Python so the tab has a program running: odek doesn't count
-# shells as running programs, and a real agent wouldn't be one.
-AGENT = f"#!{sys.executable}\nimport subprocess, sys\nsubprocess.run(['/bin/bash', '{agent_sh}', *sys.argv[1:]])\n"
+# Started through a tiny launcher named "claude": odek doesn't count shells as
+# running programs, and the pane title shows the program's name.
+AGENT_C = r"""#include <unistd.h>
+#include <sys/wait.h>
+int main(int argc, char **argv) {
+    char *args[argc + 2];
+    args[0] = "/bin/bash";
+    args[1] = "AGENT_SH";
+    for (int i = 1; i <= argc; i++) args[i + 1] = argv[i];  /* argv[argc] is NULL */
+    pid_t pid = fork();
+    if (pid == 0) execv(args[0], args);
+    waitpid(pid, 0, 0);
+    return 0;
+}
+""".replace("AGENT_SH", agent_sh)
 
 steps, frames = [], []  # frames: (name, seconds on screen; 0 = only if it changed, caption)
 caption = ""
@@ -68,16 +102,26 @@ def hold(seconds, every=0.5):
         snap(every)
 
 
+def run(cmd, hold_secs=2.0):
+    # Type a command into the shell a key at a time, then run it.
+    for chunk in re.findall(r" *[^ ]", cmd):  # step lines are trimmed
+        steps.extend([f"keys {chunk}", "wait 0.03"])
+        snap(0.055)
+    steps.extend(["keys \\r", "wait 0.6"])
+    snap(hold_secs)
+
+
 # Setup, before the first frame: two projects, four tabs.
 steps += ["appearance dark", "setting terminalTheme Dark", "renamegroup odek", "rename reflow fix",
-          f"line {agent} 'Fix reflow when the window narrows' 0.9 src/term/grid.rs src/term/vt.rs:282 "
-          "'+12 −3' 'cargo test -q' '214 passed' 'Tests pass. Commit the fix?'",
+          f"line {agent} 'Fix reflow when the window narrows' 0.9 src/term/grid.rs src/term/vt.rs "
+          "12 3 'cargo test -q' 'test result: ok. 214 passed' 'Keep prompt marks on reflow'",
           "newtab", "rename toml highlighting",
-          f"line {agent} 'Highlight TOML in the code viewer' 1.4 Cargo.toml src/highlight.rs:95 "
-          "'+9 −0' 'cargo build --release' 'built in 38s'",
+          f"line {agent} 'Highlight TOML in the code viewer' 1.4 Cargo.toml src/highlight.rs "
+          "9 0 'cargo build --release' 'Finished release in 38.2s'",
+          "newtab", "rename zsh",
           "newtab", "group website", "rename landing page",
-          f"line cd {site} && {agent} 'Add the download button' 1.2 styles.css index.html:14 "
-          "'+6 −1' 'npm run build' 'built in 1.4s'",
+          f"line cd {site} && {agent} 'Add a download button' 1.2 styles.css index.html "
+          "6 1 'npm run build' 'built in 1.4s'",
           "newtab", "rename dev server",
           f"line cd {site} && python3 -m http.server 8080",
           "wait 0.8", "nexttab", "wait 0.3"]
@@ -86,6 +130,9 @@ caption = "Run each coding agent in its own tab, grouped by project"
 hold(4.0)
 steps += ["nexttab", "wait 0.3"]
 hold(3.0)
+steps += ["nexttab", "wait 0.3"]  # a plain zsh beside the agents
+snap(0.5)
+run("ls src/term", hold_secs=1.6)
 steps += ["nexttab", "wait 0.3"]
 hold(2.5)
 
@@ -101,31 +148,47 @@ snap(2.2)
 
 caption = "Open the line it changed, right beside the terminal"
 steps += [f"open {demo}/src/term/vt.rs:282", "wait 1.2"]
-snap(3.2)
+snap(2.6)
+
+caption = "Browse the project tree"
+steps += ["files", "wait 1.0"]
+snap(2.6)
 
 caption = "Then let it carry on"
-steps += ["focusterm", "wait 0.3", "keys y", "wait 0.3"]
+steps += ["focusterm", "wait 0.3", "keys \\r", "wait 0.8"]
+snap(2.8)
+
+caption = "And check its commit from your shell"
+steps += ["nexttab", "wait 0.2", "nexttab", "wait 0.4"]
 snap(0.6)
-steps += ["keys \\r", "wait 0.8"]
-snap(3.0)
+run("git log --oneline -3", hold_secs=3.4)
 steps += ["setting terminalTheme", "quit"]
 
 # The projects the agents work in: a clone of this repo and a tiny website.
 shots, zdot, cards = f"{tmp}/shots", f"{tmp}/zdot", f"{tmp}/cards"
 for d in (shots, zdot, cards):
     os.makedirs(d)
-for path, text in ((agent_sh, AGENT_SH), (agent, AGENT)):
+for path, text in ((agent_sh, AGENT_SH), (f"{tmp}/claude.c", AGENT_C)):
     with open(path, "w") as f:
         f.write(text)
-os.chmod(agent, 0o755)
+subprocess.run(["cc", "-O", "-o", agent, f"{tmp}/claude.c"], check=True)
 with open(f"{zdot}/.zshrc", "w") as f:
     f.write("PROMPT='%F{cyan}%1~%f %F{green}❯%f '\nexport GIT_PAGER=cat PAGER=cat\n")
 shutil.rmtree(base, ignore_errors=True)
-subprocess.run(["git", "clone", "-q", root, demo], check=True)
-subprocess.run(["git", "-C", demo, "checkout", "-q", "-B", "main"], check=True)
+# A plain main at the latest origin/main: no remotes or other branches in the log.
+head = subprocess.run(["git", "-C", root, "rev-parse", "origin/main"], capture_output=True, text=True,
+                      check=True).stdout.strip()
+subprocess.run(["git", "clone", "-q", "--no-checkout", root, demo], check=True)
+for args in (["checkout", "-q", "-B", "main", head], ["remote", "remove", "origin"]):
+    subprocess.run(["git", "-C", demo, *args], check=True)
+for branch in subprocess.run(["git", "-C", demo, "branch", "--format=%(refname:short)"],
+                             capture_output=True, text=True).stdout.split():
+    if branch != "main":
+        subprocess.run(["git", "-C", demo, "branch", "-q", "-D", branch], check=True)
 os.makedirs(site)
-for name in ("index.html", "styles.css"):
-    open(f"{site}/{name}", "w").close()
+for name, lines in (("index.html", 86), ("styles.css", 142)):
+    with open(f"{site}/{name}", "w") as f:
+        f.write("\n" * lines)
 
 env = dict(
     os.environ,

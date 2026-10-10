@@ -30,10 +30,19 @@ define_class!(
             let b = self.bounds();
             NSColor::windowBackgroundColor().setFill();
             NSBezierPath::fillRect(b);
-            NSColor::separatorColor().setFill();
-            NSBezierPath::fillRect(NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(b.size.width, 1.0)));
+            let focused = self.ivars().focused.get();
+            // The focused pane gets a green rule along the bottom and a green
+            // dot before its title: a brighter title alone is hard to tell
+            // apart in the light theme.
+            let (rule, rule_h) = if focused {
+                (NSColor::systemGreenColor(), 2.0)
+            } else {
+                (NSColor::separatorColor(), 1.0)
+            };
+            rule.setFill();
+            NSBezierPath::fillRect(NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(b.size.width, rule_h)));
 
-            let color = if self.ivars().focused.get() {
+            let color = if focused {
                 NSColor::labelColor()
             } else {
                 NSColor::tertiaryLabelColor()
@@ -52,6 +61,14 @@ define_class!(
             let rect = NSRect::new(NSPoint::new(30.0, 4.0), NSSize::new((b.size.width - 60.0).max(0.0), 16.0));
             let title = NSString::from_str(&self.ivars().title.borrow());
             unsafe { title.drawInRect_withAttributes(rect, Some(&attrs)) };
+            if focused {
+                let w = unsafe { title.sizeWithAttributes(Some(&attrs)) }.width.min(rect.size.width);
+                let d = 7.0;
+                let x = (rect.origin.x + (rect.size.width - w) / 2.0 - d - 6.0).max(6.0);
+                let dot = NSRect::new(NSPoint::new(x, (b.size.height - d) / 2.0 + 1.0), NSSize::new(d, d));
+                NSColor::systemGreenColor().setFill();
+                NSBezierPath::bezierPathWithOvalInRect(dot).fill();
+            }
         }
     }
 );

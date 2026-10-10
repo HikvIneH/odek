@@ -16,6 +16,8 @@ BIN="odek"           # cargo binary name and terminal command
 ID="com.hikvineh.$BIN"
 VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
 
+# Keep build-machine paths (home folder, user name) out of the binary.
+export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$HOME=~"
 cargo build --release
 app="dist/$APP.app"
 rm -rf "$app"

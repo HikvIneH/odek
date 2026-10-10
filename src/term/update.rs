@@ -169,15 +169,11 @@ fn announce(mtm: MainThreadMarker, version: &str) {
     let info = format!(
         "You have {CURRENT}. If you installed Odek with Homebrew, update it with:\n\nbrew upgrade --cask odek"
     );
-    if alert(
-        mtm,
-        &format!("Odek {version} is available"),
-        &info,
-        &["View Release", "Later"],
-    ) {
-        if let Some(url) = NSURL::URLWithString(&NSString::from_str(RELEASE_PAGE)) {
-            NSWorkspace::sharedWorkspace().openURL(&url);
-        }
+    let title = format!("Odek {version} is available");
+    if alert(mtm, &title, &info, &["View Release", "Later"])
+        && let Some(url) = NSURL::URLWithString(&NSString::from_str(RELEASE_PAGE))
+    {
+        NSWorkspace::sharedWorkspace().openURL(&url);
     }
 }
 

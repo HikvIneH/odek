@@ -1,0 +1,17 @@
+#!/bin/bash
+# The `odek` command, shipped inside Odek.app/Contents/Resources and linked onto
+# your PATH (by Homebrew or `scripts/bundle.sh --install`).
+#
+# odek               open odek (your tabs come back)
+# odek <folder>      a new tab in that folder
+# odek <file>        the file in the code viewer
+# odek --viewer [p]  the code viewer in a window of its own
+id=com.hikvineh.odek
+abs() { (cd "$(dirname "$1")" && printf '%s/%s' "$(pwd)" "$(basename "$1")"); }
+if [ "${1:-}" = "--viewer" ]; then
+  target=$(abs "${2:-.}"); [ "${2:-.}" = "." ] && target=$PWD
+  exec open -n -b "$id" --args --viewer "$target"
+fi
+[ -z "${1:-}" ] && exec open -b "$id"
+target=$(abs "$1"); [ "$1" = "." ] && target=$PWD
+exec open -b "$id" "$target"

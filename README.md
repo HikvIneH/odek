@@ -57,9 +57,24 @@ cap. One idle shell uses about 38 MB and six busy panes about 70 MB; see
 
 ## Install
 
-You need macOS 12 or later, a Rust toolchain (`cargo`) and optionally a
-[Nerd Font](https://www.nerdfonts.com) such as MesloLGS NF for prompt icons.
-There are no prebuilt releases yet; build from source:
+odek runs on Apple Silicon Macs with macOS 12 or later. A
+[Nerd Font](https://www.nerdfonts.com) such as MesloLGS NF is optional, for
+prompt icons.
+
+```sh
+brew install --cask hikvineh/tap/odek
+```
+
+This installs `Odek.app` and the `odek` command. Update with
+`brew upgrade --cask odek`.
+
+odek isn't notarized by Apple yet, so the cask clears the download quarantine
+flag for you. If you download the zip from
+[Releases](https://github.com/HikvIneH/odek/releases) instead, macOS will refuse
+to open it the first time: choose **Open Anyway** in System Settings › Privacy &
+Security, or run `xattr -dr com.apple.quarantine /Applications/Odek.app`.
+
+To build from source you need a Rust toolchain (`cargo`):
 
 ```sh
 git clone https://github.com/HikvIneH/odek.git
@@ -67,10 +82,8 @@ cd odek
 scripts/bundle.sh --install
 ```
 
-This builds a release binary, wraps it in `Odek.app`, signs it ad hoc, and
-installs `~/Applications/Odek.app` plus `~/.local/bin/odek`, a small launcher
-(make sure `~/.local/bin` is on your `PATH`). Without `--install` it only builds
-`dist/Odek.app`.
+This installs `~/Applications/Odek.app` and links `~/.local/bin/odek` (make sure
+`~/.local/bin` is on your `PATH`).
 
 ## Usage
 

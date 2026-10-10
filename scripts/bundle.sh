@@ -4,6 +4,10 @@
 #
 #   scripts/bundle.sh            # → dist/APP.app
 #   scripts/bundle.sh --install  # → ~/Applications/APP.app + ~/.local/bin/BIN
+#   scripts/bundle.sh --zip      # → dist/APP-VERSION.zip, the release download
+#
+# Signs ad hoc unless ODEK_SIGN_IDENTITY names a code-signing certificate in
+# your keychain (releases use one so macOS keeps an update's permissions).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -16,9 +20,10 @@ cargo build --release
 app="dist/$APP.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-cp "target/release/$BIN" "$app/Contents/MacOS/$BIN"
+cp "${CARGO_TARGET_DIR:-target}/release/$BIN" "$app/Contents/MacOS/$BIN"
 [ -f assets/AppIcon.icns ] && cp assets/AppIcon.icns "$app/Contents/Resources/"
 cp LICENSE THIRD_PARTY_NOTICES.md "$app/Contents/Resources/"
+cp "scripts/$BIN" "$app/Contents/Resources/$BIN"
 
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -56,30 +61,22 @@ cat > "$app/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-codesign --force --sign - "$app" >/dev/null
+codesign --force --sign "${ODEK_SIGN_IDENTITY:--}" "$app" >/dev/null
 echo "built $app ($(du -sh "$app" | cut -f1))"
 
-if [ "${1:-}" = "--install" ]; then
+case "${1:-}" in
+--install)
   mkdir -p ~/Applications ~/.local/bin
   rm -rf ~/Applications/"$APP.app"
   cp -R "$app" ~/Applications/
-  cat > ~/.local/bin/"$BIN" <<SH
-#!/bin/bash
-# $BIN               open $APP (your tabs come back)
-# $BIN <folder>      a new tab in that folder
-# $BIN <file>        the file in the code viewer
-# $BIN --viewer [p]  the code viewer in a window of its own
-app="\$HOME/Applications/$APP.app"
-abs() { (cd "\$(dirname "\$1")" && printf '%s/%s' "\$(pwd)" "\$(basename "\$1")"); }
-if [ "\${1:-}" = "--viewer" ]; then
-  target=\$(abs "\${2:-.}"); [ "\${2:-.}" = "." ] && target=\$PWD
-  exec open -n -a "\$app" --args --viewer "\$target"
-fi
-[ -z "\${1:-}" ] && exec open -a "\$app"
-target=\$(abs "\$1"); [ "\$1" = "." ] && target=\$PWD
-exec open -a "\$app" "\$target"
-SH
-  chmod +x ~/.local/bin/"$BIN"
+  ln -sf ~/Applications/"$APP.app/Contents/Resources/$BIN" ~/.local/bin/"$BIN"
   echo "installed ~/Applications/$APP.app and ~/.local/bin/$BIN"
   case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) echo "note: add ~/.local/bin to PATH";; esac
-fi
+  ;;
+--zip)
+  zip="dist/$APP-$VERSION.zip"
+  rm -f "$zip"
+  ditto -c -k --sequesterRsrc --keepParent "$app" "$zip"
+  echo "zipped $zip  sha256 $(shasum -a 256 "$zip" | cut -d' ' -f1)"
+  ;;
+esac

@@ -1,0 +1,100 @@
+name: Release
+
+# Push a tag like v0.3.0 (matching Cargo.toml's version, with a CHANGELOG.md
+# section) and this builds, signs and publishes the release, then points the
+# Homebrew cask at it.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Check the tag matches Cargo.toml
+        id: version
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          test "v$version" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME, Cargo.toml $version"; exit 1; }
+          grep -q "^## $version " CHANGELOG.md || { echo "no CHANGELOG.md section for $version"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # The certificate is self-signed for now: macOS still asks before first
+      # launch, but keeps an app's permissions across updates signed with it.
+      - name: Import the signing certificate
+        id: cert
+        env:
+          P12: ${{ secrets.SIGNING_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.SIGNING_P12_PASSWORD }}
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          pass=$(openssl rand -hex 16)
+          echo "$P12" | base64 -d > "$RUNNER_TEMP/signing.p12"
+          security create-keychain -p "$pass" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$pass" "$keychain"
+          security import "$RUNNER_TEMP/signing.p12" -k "$keychain" -P "$P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$pass" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/signing.p12"
+          identity=$(security find-identity -p codesigning "$keychain" | grep -m1 ')' | awk '{print $2}')
+          test -n "$identity"
+          echo "identity=$identity" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        env:
+          ODEK_SIGN_IDENTITY: ${{ steps.cert.outputs.identity }}
+        run: |
+          scripts/bundle.sh --zip
+          codesign --verify --strict dist/Odek.app
+
+      - name: Publish the release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          zip="dist/Odek-$VERSION.zip"
+          sha=$(shasum -a 256 "$zip" | cut -d' ' -f1)
+          {
+            awk -v v="$VERSION" '$0 ~ "^## "v" "{f=1;next} /^## /{f=0} f' CHANGELOG.md
+            echo "### Install"
+            echo
+            echo '```sh'
+            echo 'brew install --cask hikvineh/tap/odek'
+            echo '```'
+            echo
+            echo "Apple Silicon, macOS 12+. Not notarized yet: if you use the zip below, choose **Open Anyway** in System Settings › Privacy & Security on first launch, or run \`xattr -dr com.apple.quarantine /Applications/Odek.app\`."
+            echo
+            echo "SHA-256 \`Odek-$VERSION.zip\`: \`$sha\`"
+          } > "$RUNNER_TEMP/notes.md"
+          gh release create "$GITHUB_REF_NAME" "$zip" --title "odek $VERSION" --notes-file "$RUNNER_TEMP/notes.md"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Update the Homebrew cask
+        env:
+          TAP_DEPLOY_KEY: ${{ secrets.TAP_DEPLOY_KEY }}
+          VERSION: ${{ steps.version.outputs.version }}
+          SHA: ${{ steps.release.outputs.sha }}
+        run: |
+          key="$RUNNER_TEMP/tap_key"
+          printf '%s\n' "$TAP_DEPLOY_KEY" > "$key" && chmod 600 "$key"
+          export GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+          git clone -q git@github.com:HikvIneH/homebrew-tap.git "$RUNNER_TEMP/tap"
+          cd "$RUNNER_TEMP/tap"
+          sed -i '' -e "s/^  version \".*\"/  version \"$VERSION\"/" -e "s/^  sha256 \".*\"/  sha256 \"$SHA\"/" Casks/odek.rb
+          git -c user.name=github-actions -c user.email=41898282+github-actions[bot]@users.noreply.github.com \
+            commit -qam "odek $VERSION"
+          git push -q origin HEAD:main
+          rm "$key"
+
+      - name: Remove the keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true

@@ -27,6 +27,24 @@ scripts/selftest.sh target/release/odek <project> <out-dir> <query> <file>...
 
 Icons and the wordmark live in `assets/`.
 
+## Releasing
+
+1. Bump `version` in `Cargo.toml` and add a `## <version> — <date>` section to
+   `CHANGELOG.md`; merge to `main`.
+2. Tag the merge and push it: `git tag v0.3.0 && git push origin v0.3.0`.
+
+The [release workflow](../.github/workflows/release.yml) builds and signs
+`Odek.app`, publishes the GitHub release with the zip and that changelog section,
+and updates the cask in [HikvIneH/homebrew-tap](https://github.com/HikvIneH/homebrew-tap).
+It needs three repository secrets: `SIGNING_P12_BASE64` and
+`SIGNING_P12_PASSWORD` (the code-signing certificate) and `TAP_DEPLOY_KEY` (an
+SSH key with write access to the tap).
+
+Builds are signed with a self-signed certificate for now. macOS still asks
+before the first launch of a downloaded copy (the cask clears that), but keeps
+the app's permissions across updates because the signature's identity stays the
+same.
+
 ## How it works
 
 Terminal:

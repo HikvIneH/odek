@@ -23,7 +23,7 @@ body:
     attributes:
       label: odek version
       description: Odek ▸ About Odek
-      placeholder: "0.4.1"
+      placeholder: "0.4.2"
     validations:
       required: true
   - type: input

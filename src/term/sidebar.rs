@@ -278,19 +278,7 @@ impl SidebarList {
 
     /// The pane line under `y`, if it's one of a split tab's.
     fn pane_at(&self, y: f64) -> Option<Id> {
-        self.ivars()
-            .shown
-            .borrow()
-            .iter()
-            .find_map(|(row, top)| match row {
-                Row::Tab { panes, named, .. } if panes.len() > 1 => {
-                    let first = top + caption_h(*named);
-                    let i = ((y - first) / TAB_H).floor().max(0.0) as usize;
-                    panes.get(i).map(|p| p.id)
-                }
-                _ => None,
-            })
-            .filter(|_| matches!(self.key_at(y), RowKey::Tab(_)))
+        split_pane_at(&self.ivars().shown.borrow(), y)
     }
 
     /// Where a dragged tab would land: (group, index, line y).
@@ -510,6 +498,24 @@ fn brand_blue() -> Retained<NSColor> {
     )
 }
 
+/// The split tab's pane line under `y`, among rows laid out at their tops.
+/// Only the row under `y` counts: a click on an unsplit tab above a split one
+/// must select that tab, not the split tab's first pane.
+fn split_pane_at(shown: &[(Row, f64)], y: f64) -> Option<Id> {
+    let (row, top) = shown
+        .iter()
+        .find(|(row, top)| y >= *top && y < top + row_height(row))?;
+    let Row::Tab { panes, named, .. } = row else {
+        return None;
+    };
+    if panes.len() < 2 {
+        return None;
+    }
+    // The caption over the panes counts as the first pane.
+    let i = ((y - top - caption_h(*named)) / TAB_H).floor().max(0.0) as usize;
+    panes.get(i).map(|p| p.id)
+}
+
 fn row_height(row: &Row) -> f64 {
     match row {
         Row::Group { .. } => GROUP_H,
@@ -656,5 +662,87 @@ impl Sidebar {
         if let Some(w) = self.view.window() {
             w.makeFirstResponder(Some(&self.search));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tab(id: Id, panes: &[Id], named: bool) -> Row {
+        Row::Tab {
+            id,
+            title: String::new(),
+            subtitle: String::new(),
+            active: false,
+            attention: false,
+            running: false,
+            named,
+            panes: panes
+                .iter()
+                .map(|&id| PaneRow {
+                    id,
+                    title: String::new(),
+                    subtitle: String::new(),
+                    focused: false,
+                    attention: false,
+                    running: false,
+                })
+                .collect(),
+        }
+    }
+
+    fn group(id: Id) -> Row {
+        Row::Group {
+            id,
+            name: String::new(),
+            collapsed: false,
+            count: 0,
+        }
+    }
+
+    /// Rows stacked from the top, as relayout places them.
+    fn laid_out(rows: Vec<Row>) -> Vec<(Row, f64)> {
+        let mut top = 0.0;
+        rows.into_iter()
+            .map(|row| {
+                let at = top;
+                top += row_height(&row);
+                (row, at)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn only_the_split_tab_under_the_click_picks_a_pane() {
+        // A group with a plain tab above a group of split tabs, as in a
+        // sidebar where the first group's tabs could not be clicked.
+        let shown = laid_out(vec![
+            group(1),
+            tab(10, &[], false),
+            group(2),
+            tab(20, &[21, 22], false),
+            tab(30, &[31, 32], true),
+            tab(40, &[], false),
+        ]);
+        let middle = |i: usize| shown[i].1 + row_height(&shown[i].0) / 2.0;
+
+        // The plain tab above the split ones: no pane, so the tab is selected.
+        assert_eq!(split_pane_at(&shown, middle(1)), None);
+        assert_eq!(split_pane_at(&shown, shown[0].1 + 1.0), None);
+
+        // Each pane line of a split tab.
+        let t20 = shown[3].1;
+        assert_eq!(split_pane_at(&shown, t20 + 1.0), Some(21));
+        assert_eq!(split_pane_at(&shown, t20 + TAB_H + 1.0), Some(22));
+
+        // A named split tab: the caption counts as its first pane.
+        let t30 = shown[4].1;
+        assert_eq!(split_pane_at(&shown, t30 + 1.0), Some(31));
+        assert_eq!(split_pane_at(&shown, t30 + PANE_H + TAB_H + 1.0), Some(32));
+
+        // The plain tab below them, and empty space under the list.
+        assert_eq!(split_pane_at(&shown, middle(5)), None);
+        assert_eq!(split_pane_at(&shown, 10_000.0), None);
     }
 }

@@ -16,6 +16,8 @@ use super::vt::Term;
 
 /// Wait this long for the end of a synchronized update before drawing anyway.
 const SYNC_TIMEOUT: Duration = Duration::from_millis(150);
+/// Most output parsed per hold of the terminal lock.
+const PARSE_SLICE: usize = 16 << 10;
 
 /// Environment variables from whatever launched us that would confuse
 /// programs into thinking they run in another terminal.
@@ -179,11 +181,16 @@ impl Reader {
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
                 Err(_) => break,
             };
-            let (reply, sync) = {
+            // Parse in slices, letting go of the terminal in between, so the
+            // main thread can draw while a flood of output is coming in.
+            let mut reply = Vec::new();
+            let mut sync = false;
+            for slice in buf[..n].chunks(PARSE_SLICE) {
                 let mut term = self.term.lock().unwrap();
-                parser.advance(&mut *term, &buf[..n]);
-                (std::mem::take(&mut term.reply), term.modes.sync)
-            };
+                parser.advance(&mut *term, slice);
+                reply.append(&mut term.reply);
+                sync = term.modes.sync;
+            }
             if !reply.is_empty() {
                 let _ = self.tx.send(reply);
             }

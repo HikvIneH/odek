@@ -307,20 +307,21 @@ impl Term {
         while self.main.lines.len() > rows {
             let last = self.main.lines.len() - 1;
             if last > crow && self.main.lines[last].cells.iter().all(Cell::is_blank) {
-                self.main.lines.pop();
+                self.main.lines.pop_back();
             } else {
-                let line = self.main.lines.remove(0);
-                self.history.push(line.trimmed());
+                if let Some(line) = self.main.lines.pop_front() {
+                    self.history.push(line.trimmed());
+                }
                 crow = crow.saturating_sub(1);
             }
         }
         while self.main.lines.len() < rows {
             if !alt && let Some(mut line) = self.history.pop_back() {
                 fit_width(&mut line, cols);
-                self.main.lines.insert(0, line);
+                self.main.lines.push_front(line);
                 crow += 1;
             } else {
-                self.main.lines.push(Line::new(cols, Cell::BLANK));
+                self.main.lines.push_back(Line::new(cols, Cell::BLANK));
             }
         }
         self.alt.lines.resize_with(rows, || Line::new(cols, Cell::BLANK));
@@ -467,7 +468,7 @@ impl Term {
         for line in all {
             self.history.push(line.trimmed());
         }
-        self.main.lines = screen;
+        self.main.lines = screen.into();
         self.cursor.row = c - top;
         let shift = |q: &mut std::collections::VecDeque<u64>| {
             q.retain(|&m| m < a || m >= b);
@@ -614,7 +615,7 @@ impl Term {
         }
         out.resize_with(rows, || Line::new(cols, Cell::BLANK));
         out.shrink_to_fit();
-        self.main.lines = out;
+        self.main.lines = out.into();
         let (row, col) = (cursor_at.0 - top, cursor_at.1);
         let c = if alt {
             &mut self.saved_main.cursor
@@ -637,8 +638,13 @@ impl Term {
     }
 
     fn touch_range(&mut self, from: usize, to: usize) {
-        for r in from..=to.min(self.rows - 1) {
-            self.touch(r);
+        // A full redraw is already due: every line feed of a scrolling
+        // screen lands here, so don't mark the rows one by one.
+        if self.all_dirty {
+            return;
+        }
+        if let Some(rows) = self.dirty.get_mut(from..=to.min(self.rows - 1)) {
+            rows.fill(true);
         }
     }
 
@@ -668,9 +674,15 @@ impl Term {
                 self.history.push(line);
             }
         }
+        let rows = self.rows;
         let grid = self.grid_mut();
-        grid.lines[top..=bottom].rotate_left(n);
-        for line in &mut grid.lines[bottom + 1 - n..=bottom] {
+        if top == 0 && bottom == rows - 1 {
+            // The whole screen: turn the ring instead of moving every line.
+            grid.lines.rotate_left(n);
+        } else {
+            grid.lines.make_contiguous()[top..=bottom].rotate_left(n);
+        }
+        for line in grid.lines.range_mut(bottom + 1 - n..=bottom) {
             line.reset(cols, fill);
         }
         if top == 0 && bottom == self.rows - 1 {
@@ -683,9 +695,14 @@ impl Term {
         let n = n.min(bottom - top + 1);
         let fill = self.erase_cell();
         let cols = self.cols;
+        let rows = self.rows;
         let grid = self.grid_mut();
-        grid.lines[top..=bottom].rotate_right(n);
-        for line in &mut grid.lines[top..top + n] {
+        if top == 0 && bottom == rows - 1 {
+            grid.lines.rotate_right(n);
+        } else {
+            grid.lines.make_contiguous()[top..=bottom].rotate_right(n);
+        }
+        for line in grid.lines.range_mut(top..top + n) {
             line.reset(cols, fill);
         }
         self.touch_range(top, bottom);
@@ -1561,6 +1578,31 @@ mod tests {
 
     fn screen(t: &Term) -> Vec<String> {
         t.screen_text().lines().map(str::to_string).collect()
+    }
+
+    #[test]
+    fn region_scrolls_after_the_screen_ring_has_turned() {
+        let mut t = Term::new(10, 4);
+        run(&mut t, b"1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\r\n8\r\n9");
+        assert_eq!(screen(&t), ["6", "7", "8", "9"]);
+        let history: Vec<String> = (0..5)
+            .map(|i| {
+                let mut s = String::new();
+                line_text(t.line(i), &t.clusters, &mut s);
+                s
+            })
+            .collect();
+        assert_eq!(history, ["1", "2", "3", "4", "5"]);
+        // Rows 2-3 only: a line feed at the region's bottom, then a reverse
+        // index at its top, leave the rows outside it alone.
+        run(&mut t, b"\x1b[2;3r\x1b[3;1H\n");
+        assert_eq!(screen(&t), ["6", "8", "", "9"]);
+        run(&mut t, b"\x1b[2;1H\x1bM");
+        assert_eq!(screen(&t), ["6", "", "8", "9"]);
+        assert_eq!(t.total_lines(), 5 + 4, "region scrolls keep no history");
+        // And the whole screen again afterwards.
+        run(&mut t, b"\x1b[r\x1b[4;1H\na");
+        assert_eq!(screen(&t), ["", "8", "9", "a"]);
     }
 
     #[test]

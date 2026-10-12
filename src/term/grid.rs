@@ -70,6 +70,11 @@ impl Cell {
     pub fn is_blank(&self) -> bool {
         self.ch == ' ' as u32 && self.flags == 0 && self.style == 0
     }
+
+    /// The whole cell as one number: two cells are equal when these are.
+    const fn bits(&self) -> u64 {
+        self.ch as u64 | (self.style as u64) << 32 | (self.flags as u64) << 48
+    }
 }
 
 #[derive(Clone, Default, Debug)]
@@ -89,15 +94,27 @@ impl Line {
 
     /// A copy without trailing default blanks, sized exactly, for scrollback.
     pub fn trimmed(&self) -> Line {
-        let end = self
-            .cells
-            .iter()
-            .rposition(|c| !c.is_blank())
-            .map_or(0, |i| i + 1);
         Line {
-            cells: self.cells[..end].to_vec(),
+            cells: self.cells[..self.content_len()].to_vec(),
             wrapped: self.wrapped,
         }
+    }
+
+    /// Cells up to and including the last one that isn't a default blank.
+    /// Runs on every line that scrolls off, so it checks eight cells at a
+    /// time (one OR over their bits, which the compiler vectorizes).
+    pub fn content_len(&self) -> usize {
+        const BLANK: u64 = Cell::BLANK.bits();
+        let all_blank = |group: &[Cell]| group.iter().fold(0, |acc, c| acc | (c.bits() ^ BLANK)) == 0;
+        let cells = &self.cells;
+        let mut end = cells.len();
+        while end >= 8 && all_blank(&cells[end - 8..end]) {
+            end -= 8;
+        }
+        while end > 0 && cells[end - 1].bits() == BLANK {
+            end -= 1;
+        }
+        end
     }
 
     pub fn reset(&mut self, cols: usize, fill: Cell) {
@@ -253,9 +270,10 @@ impl History {
     }
 }
 
-/// The visible screen: exactly `rows` lines of exactly `cols` cells.
+/// The visible screen: exactly `rows` lines of exactly `cols` cells. A ring,
+/// so scrolling the whole screen moves one line, not all of them.
 pub struct Grid {
-    pub lines: Vec<Line>,
+    pub lines: VecDeque<Line>,
 }
 
 impl Grid {
@@ -280,6 +298,40 @@ pub fn line_text(line: &Line, clusters: &Clusters, out: &mut String) {
             out.push_str(clusters.get(c.ch));
         } else {
             out.push(char::from_u32(c.ch).unwrap_or(' '));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn content_len_finds_the_last_non_blank_cell() {
+        let blank = Line::new(20, Cell::BLANK);
+        assert_eq!(blank.content_len(), 0);
+        assert_eq!(Line::new(3, Cell::BLANK).content_len(), 0);
+        // Either side of each group of eight checked at once.
+        for at in [0, 1, 6, 7, 8, 9, 15, 16, 19] {
+            let mut line = blank.clone();
+            line.cells[at].ch = 'x' as u32;
+            assert_eq!(line.content_len(), at + 1, "char at {at}");
+            assert_eq!(line.trimmed().cells.len(), at + 1);
+        }
+        // A space with a style or flags is content, as is_blank says.
+        let mut styled = blank.clone();
+        styled.cells[12] = Cell::blank(3);
+        assert_eq!(styled.content_len(), 13);
+        let mut spacer = blank.clone();
+        spacer.cells[17].flags = flag::SPACER;
+        assert_eq!(spacer.content_len(), 18);
+        for line in [&styled, &spacer] {
+            let end = line
+                .cells
+                .iter()
+                .rposition(|c| !c.is_blank())
+                .map_or(0, |i| i + 1);
+            assert_eq!(line.content_len(), end);
         }
     }
 }

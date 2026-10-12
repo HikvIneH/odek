@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Keyboard Shortcuts (⌘/) is larger and centred over the window, with every
+  command in three columns, so nothing needs scrolling
+
 ## 0.4.0 — 2026-10-12
 
 - Profiles: save a group (tabs, splits, each pane's folder and running

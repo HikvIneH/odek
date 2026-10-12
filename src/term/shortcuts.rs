@@ -16,10 +16,11 @@ use objc2_foundation::{
     NSArray, NSAttributedString, NSDictionary, NSMutableAttributedString, NSPoint, NSRect, NSSize, NSString,
 };
 
-/// The panel's size when the screen has room: large enough to show every
-/// command at once, in columns.
+/// The panel's width when the screen has room, and its least height: it's
+/// as tall as its tallest column, up to what the screen allows, so every
+/// command shows at once.
 const WIDTH: f64 = 860.0;
-const HEIGHT: f64 = 580.0;
+const HEIGHT: f64 = 480.0;
 /// Margin around the columns, and the space between them.
 const PAD: f64 = 22.0;
 const GAP: f64 = 28.0;
@@ -55,7 +56,7 @@ pub fn toggle(mtm: MainThreadMarker) {
     }
     let app = NSApplication::sharedApplication(mtm);
     let window = app.keyWindow().or_else(|| app.mainWindow());
-    // As large as WIDTH × HEIGHT, smaller on a small screen.
+    // WIDTH wide (narrower on a small screen), and at most the screen's height.
     let screen = window
         .as_ref()
         .and_then(|w| w.screen())
@@ -63,7 +64,7 @@ pub fn toggle(mtm: MainThreadMarker) {
         .map(|s| s.visibleFrame());
     let size = NSSize::new(
         screen.map_or(WIDTH, |s| WIDTH.min(s.size.width - 80.0)),
-        screen.map_or(HEIGHT, |s| HEIGHT.min(s.size.height - 120.0)),
+        screen.map_or(2.0 * HEIGHT, |s| (s.size.height - 80.0).max(HEIGHT)),
     );
     let panel = build(mtm, size);
     PANEL.with(|p| *p.borrow_mut() = Some(panel.clone()));
@@ -137,6 +138,11 @@ fn build(mtm: MainThreadMarker, size: NSSize) -> Retained<NSPanel> {
         text.setSelectable(false);
         text.setDrawsBackground(false);
         text.setTextContainerInset(NSSize::new(0.0, 0.0));
+        // No padding inside the column, so the keys' tab stop (just inside
+        // its right edge) is within the line and they stay on it.
+        if let Some(container) = unsafe { text.textContainer() } {
+            container.setLineFragmentPadding(0.0);
+        }
         text.setVerticallyResizable(true);
         text.setHorizontallyResizable(false);
         if let Some(storage) = unsafe { text.textStorage() } {
@@ -150,7 +156,11 @@ fn build(mtm: MainThreadMarker, size: NSSize) -> Retained<NSPanel> {
         .iter()
         .map(|(t, _)| t.frame().size.height)
         .fold(0.0, f64::max);
-    let doc_h = (tallest + 2.0 * PAD).max(size.height);
+    // As tall as the content, between HEIGHT and the room there is (`size`).
+    let shown_h = (tallest + 2.0 * PAD).clamp(HEIGHT.min(size.height), size.height);
+    panel.setContentSize(NSSize::new(size.width, shown_h));
+    let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(size.width, shown_h));
+    let doc_h = (tallest + 2.0 * PAD).max(shown_h);
     let doc = objc2_app_kit::NSView::initWithFrame(
         objc2_app_kit::NSView::alloc(mtm),
         NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(size.width, doc_h)),
@@ -190,39 +200,46 @@ fn column_count(width: f64) -> usize {
     n
 }
 
-/// Split sections (by their line counts) into `n` runs, in order, as even
-/// as possible: each column takes sections until it reaches its share.
+/// Split sections (by their line counts) into up to `n` runs, in order, so
+/// the tallest column is as short as it can be. A handful of sections, so
+/// trying every split is instant.
 fn split_columns(weights: &[usize], n: usize) -> Vec<std::ops::Range<usize>> {
-    let total: usize = weights.iter().sum();
-    let mut out = Vec::new();
-    let mut start = 0;
-    let mut done = 0;
-    for col in 0..n {
-        if start >= weights.len() {
-            break;
-        }
-        if col == n - 1 {
-            out.push(start..weights.len());
-            break;
-        }
-        // This column's fair share of what's left.
-        let target = (total - done).div_ceil(n - col);
-        let mut end = start;
-        let mut sum = 0;
-        while end < weights.len() {
-            let next = sum + weights[end];
-            // Stop once the share is reached, or before a section that would
-            // overshoot it by more than it fills; always take at least one.
-            if end > start && (sum >= target || (next > target && next - target > target - sum)) {
-                break;
-            }
-            sum = next;
-            end += 1;
-        }
-        out.push(start..end);
-        done += sum;
-        start = end;
+    let k = weights.len();
+    let n = n.min(k);
+    if n == 0 {
+        return Vec::new();
     }
+    let mut prefix = vec![0; k + 1];
+    for (i, w) in weights.iter().enumerate() {
+        prefix[i + 1] = prefix[i] + w;
+    }
+    // best[c][j]: the tallest column when the first j sections fill c columns;
+    // cut[c][j]: where the last of those columns starts.
+    let mut best = vec![vec![usize::MAX; k + 1]; n + 1];
+    let mut cut = vec![vec![0; k + 1]; n + 1];
+    best[0][0] = 0;
+    for c in 1..=n {
+        for j in c..=k {
+            for i in (c - 1)..j {
+                if best[c - 1][i] == usize::MAX {
+                    continue;
+                }
+                let tallest = best[c - 1][i].max(prefix[j] - prefix[i]);
+                if tallest < best[c][j] {
+                    best[c][j] = tallest;
+                    cut[c][j] = i;
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    let mut j = k;
+    for c in (1..=n).rev() {
+        let i = cut[c][j];
+        out.push(i..j);
+        j = i;
+    }
+    out.reverse();
     out
 }
 
@@ -332,7 +349,7 @@ fn section(out: &NSMutableAttributedString, title: &str, rows: &[(String, String
         NSTextTab::initWithTextAlignment_location_options(
             NSTextTab::alloc(),
             NSTextAlignment::Right,
-            width - 2.0,
+            width - 4.0,
             &NSDictionary::new(),
         )
     };
@@ -408,14 +425,14 @@ mod tests {
         assert_eq!(split_columns(&[5, 5, 5, 5, 5, 5], 3), [0..2, 2..4, 4..6]);
         // A long section stays whole in its column; the rest share the others.
         assert_eq!(split_columns(&[40, 2, 2], 3), [0..1, 1..2, 2..3]);
-        // The menus as they are today: Odek, Shell, File, Edit, View, Window,
-        // typing keys.
-        let cols = split_columns(&[8, 15, 7, 21, 9, 8, 11], 3);
-        let sums: Vec<usize> = cols
-            .iter()
-            .map(|r| [8, 15, 7, 21, 9, 8, 11][r.clone()].iter().sum())
-            .collect();
-        assert!(sums.iter().max().unwrap() - sums.iter().min().unwrap() <= 12, "{cols:?} {sums:?}");
+        // The shortest tallest column, in order: 6+12+6 | 20+15 | 17+11 = 35.
+        let w = [6, 12, 6, 20, 15, 17, 11];
+        let cols = split_columns(&w, 3);
+        assert_eq!(cols, [0..3, 3..5, 5..7]);
+        let tallest = cols.iter().map(|r| w[r.clone()].iter().sum::<usize>()).max();
+        assert_eq!(tallest, Some(35));
+        // Fewer sections than columns: one each.
+        assert_eq!(split_columns(&[3, 4], 3), [0..1, 1..2]);
     }
 
     #[test]

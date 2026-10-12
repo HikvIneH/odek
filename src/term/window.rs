@@ -22,6 +22,8 @@ use objc2_app_kit::{
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
 use super::header::{HEADER_H, PaneBox, PaneHeader};
+use super::profile::{self, Layout, Profile, ProfileTab};
+use super::profile_panel;
 use super::settings;
 use super::sidebar::{PaneRow, Row, RowKey, Sidebar, SidebarEvent};
 use super::target::Target;
@@ -764,6 +766,9 @@ impl Workbench {
                     b.new_tab_at(g, None, &dir);
                 });
                 self.add_item(&menu, "Rename Group…", move |b| b.rename_group(g));
+                self.add_item(&menu, "Save Group as Profile…", move |b| {
+                    b.save_group_as_profile(g)
+                });
                 self.add_item(&menu, "New Group…", |b| b.new_group_with(None));
                 if groups.len() > 1 {
                     menu.addItem(&NSMenuItem::separatorItem(self.mtm));
@@ -1045,6 +1050,240 @@ impl Workbench {
                 }
             }
         });
+    }
+
+    // ---- profiles ----
+
+    /// ⇧⌘O: pick a saved profile to open as a group. Profiles are read now,
+    /// from their folder, and dropped with the picker.
+    pub fn show_profiles(&self) {
+        let (profiles, errors) = profile::folder()
+            .map(|d| profile::load_all(&d))
+            .unwrap_or_default();
+        let me = self.me.clone();
+        profile_panel::show(self.mtm, profiles, errors, move |p, another| {
+            if let Some(b) = me.upgrade() {
+                b.open_profile(&p, another);
+            }
+        });
+    }
+
+    /// At launch: open the profiles marked `open_at_launch` whose group isn't
+    /// already there (restored from last time), and stay on the restored tab.
+    pub fn open_launch_profiles(&self) {
+        let Some(dir) = profile::folder() else { return };
+        let (profiles, _) = profile::load_all(&dir);
+        let restored = self.ws.borrow().active;
+        let mut opened = false;
+        for p in profiles.iter().filter(|p| p.open_at_launch) {
+            let open = self
+                .ws
+                .borrow()
+                .groups
+                .iter()
+                .any(|g| g.name.eq_ignore_ascii_case(&p.name));
+            if !open {
+                self.open_profile(p, true);
+                opened = true;
+            }
+        }
+        if opened && let Some(tab) = restored {
+            self.ws.borrow_mut().active = Some(tab);
+            self.show_active();
+            self.focus_active_pane();
+            self.save();
+        }
+    }
+
+    /// Open `p` as a new group: its tabs, splits and folders, with each
+    /// pane's command typed into its shell. When a group of that name is
+    /// already open, go to it instead, unless `another` copy is wanted.
+    pub fn open_profile(&self, p: &Profile, another: bool) {
+        if !another {
+            let open = {
+                let ws = self.ws.borrow();
+                ws.groups
+                    .iter()
+                    .find(|g| g.name.eq_ignore_ascii_case(&p.name))
+                    .and_then(|g| g.tabs.first())
+                    .map(|t| t.id)
+            };
+            if let Some(tab) = open {
+                self.ws.borrow_mut().active = Some(tab);
+                self.show_active();
+                self.focus_active_pane();
+                self.save();
+                return;
+            }
+        }
+        self.sync_ratios();
+        let group = self.ws.borrow_mut().add_group(&p.name);
+        let mut runs = Vec::new();
+        let (mut first, mut last) = (None, None);
+        for t in &p.tabs {
+            let mut focus = None;
+            let root = self.build_layout(&t.layout, &mut runs, &mut focus);
+            let lead = root.panes()[0];
+            let mut ws = self.ws.borrow_mut();
+            let id = ws.add_tab(group, last, lead);
+            if let Some(tab) = ws.tab_mut(id) {
+                tab.focus = focus.unwrap_or(lead);
+                tab.root = root;
+                tab.name = t.name.clone();
+            }
+            last = Some(id);
+            first.get_or_insert(id);
+        }
+        self.ws.borrow_mut().active = first;
+        self.show_active();
+        self.focus_active_pane();
+        self.save();
+        // The shell reads what's typed once it's ready, and stays when the
+        // command exits.
+        let panes = self.panes.borrow();
+        for (id, cmd) in runs {
+            if let Some(pane) = panes.get(&id) {
+                pane.term.write(format!("{cmd}\r").as_bytes());
+            }
+        }
+    }
+
+    fn build_layout(&self, layout: &Layout, runs: &mut Vec<(Id, String)>, focus: &mut Option<Id>) -> Node {
+        match layout {
+            Layout::Pane { dir, run, focused } => {
+                let id = self.ws.borrow_mut().new_id();
+                self.make_pane(id, &profile::expand(dir));
+                if let Some(cmd) = run {
+                    runs.push((id, cmd.clone()));
+                }
+                if *focused {
+                    *focus = Some(id);
+                }
+                Node::Pane(id)
+            }
+            Layout::Split {
+                across,
+                ratio,
+                first,
+                second,
+            } => Node::Split {
+                across: *across,
+                ratio: *ratio,
+                first: Box::new(self.build_layout(first, runs, focus)),
+                second: Box::new(self.build_layout(second, runs, focus)),
+            },
+        }
+    }
+
+    /// Save the group of the tab on screen as a profile.
+    pub fn save_active_group_as_profile(&self) {
+        let group = {
+            let ws = self.ws.borrow();
+            ws.active.and_then(|t| ws.group_of(t))
+        };
+        if let Some(g) = group {
+            self.save_group_as_profile(g);
+        }
+    }
+
+    /// Save `group` (tabs, splits, each pane's folder and the program running
+    /// in it) as a profile, under a name that starts as the group's.
+    pub fn save_group_as_profile(&self, group: Id) {
+        let name = self
+            .ws
+            .borrow()
+            .groups
+            .iter()
+            .find(|g| g.id == group)
+            .map(|g| g.name.clone());
+        let Some(name) = name else { return };
+        self.sync_ratios();
+        let me = self.me.clone();
+        self.ask_name("Save group as profile", &name, move |name| {
+            let Some(b) = me.upgrade() else { return };
+            let name = name.trim();
+            if name.is_empty() {
+                return;
+            }
+            let (Some(mut p), Some(dir)) = (b.capture_profile(group, name), profile::folder()) else {
+                return;
+            };
+            // Saving over a profile keeps whether it opens at launch.
+            p.open_at_launch = profile::load_all(&dir)
+                .0
+                .iter()
+                .any(|old| old.open_at_launch && old.name.eq_ignore_ascii_case(&p.name));
+            if let Err(e) = profile::save(&dir, &p) {
+                eprintln!("odek: could not save the profile: {e}");
+            }
+        });
+    }
+
+    fn capture_profile(&self, group: Id, name: &str) -> Option<Profile> {
+        let ws = self.ws.borrow();
+        let g = ws.groups.iter().find(|g| g.id == group)?;
+        let tabs: Vec<ProfileTab> = g
+            .tabs
+            .iter()
+            .map(|t| ProfileTab {
+                name: t.name.clone(),
+                // A one-pane tab has nothing to focus between.
+                layout: match self.capture_layout(&t.root, t.focus) {
+                    Layout::Pane { dir, run, .. } => Layout::Pane {
+                        dir,
+                        run,
+                        focused: false,
+                    },
+                    split => split,
+                },
+            })
+            .collect();
+        (!tabs.is_empty()).then(|| Profile {
+            name: name.to_string(),
+            open_at_launch: false,
+            tabs,
+        })
+    }
+
+    fn capture_layout(&self, node: &Node, focus: Id) -> Layout {
+        match node {
+            Node::Pane(id) => {
+                let panes = self.panes.borrow();
+                let pane = panes.get(id);
+                let dir = pane
+                    .and_then(|p| p.term.session_cwd().or_else(|| p.cwd.clone()))
+                    .map_or_else(|| "~".to_string(), |d| tilde(&d));
+                let run = pane
+                    .and_then(|p| p.term.foreground_args())
+                    .filter(|args| !is_shell(&args[0]))
+                    .map(|args| profile::command_line(&args));
+                Layout::Pane {
+                    dir,
+                    run,
+                    focused: *id == focus,
+                }
+            }
+            Node::Split {
+                across,
+                ratio,
+                first,
+                second,
+            } => Layout::Split {
+                across: *across,
+                ratio: *ratio,
+                first: Box::new(self.capture_layout(first, focus)),
+                second: Box::new(self.capture_layout(second, focus)),
+            },
+        }
+    }
+
+    /// The profiles folder in the code viewer, to edit or delete profiles.
+    pub fn edit_profiles(&self) {
+        let Some(dir) = profile::folder() else { return };
+        let _ = std::fs::create_dir_all(&dir);
+        let app = self.place_viewer();
+        app.show_tree_in(&dir);
+        self.refresh();
     }
 
     pub fn rename_active_tab(&self) {
@@ -1397,6 +1636,12 @@ fn program_of(term: &TermView) -> Option<String> {
     let name = term.foreground_name()?;
     let base = name.trim_start_matches('-');
     (!SHELLS.contains(&base)).then(|| base.to_string())
+}
+
+/// `zsh`, `-zsh` or `/bin/zsh`: a shell, not a program worth re-running.
+fn is_shell(arg0: &str) -> bool {
+    let base = arg0.rsplit('/').next().unwrap_or(arg0).trim_start_matches('-');
+    SHELLS.contains(&base)
 }
 
 fn list_running(names: &[String]) -> String {

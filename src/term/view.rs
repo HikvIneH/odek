@@ -635,6 +635,14 @@ impl TermView {
             .and_then(Session::foreground_name)
     }
 
+    pub fn foreground_args(&self) -> Option<Vec<String>> {
+        self.ivars()
+            .session
+            .borrow()
+            .as_ref()
+            .and_then(Session::foreground_args)
+    }
+
     #[cfg_attr(not(feature = "selftest"), allow(dead_code))]
     pub fn mem_bytes(&self) -> usize {
         self.with_term(|t| t.mem_bytes()).unwrap_or(0)

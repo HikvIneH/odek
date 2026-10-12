@@ -9,6 +9,8 @@ mod ime;
 pub mod input;
 pub mod links;
 mod notify;
+mod profile;
+mod profile_panel;
 pub mod session;
 mod settings;
 mod shortcuts;

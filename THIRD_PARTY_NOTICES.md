@@ -52,11 +52,15 @@ crates.io and the repositories listed below; none are modified.
 | serde_core | 1.0.229 | MIT OR Apache-2.0 | https://github.com/serde-rs/serde |
 | serde_derive | 1.0.229 | MIT OR Apache-2.0 | https://github.com/serde-rs/serde |
 | serde_json | 1.0.151 | MIT OR Apache-2.0 | https://github.com/serde-rs/json |
+| serde_spanned | 0.6.9 | MIT OR Apache-2.0 | https://github.com/toml-rs/toml |
 | shlex | 2.0.1 | MIT OR Apache-2.0 | https://github.com/comex/rust-shlex |
 | streaming-iterator | 0.1.9 | MIT OR Apache-2.0 | https://github.com/sfackler/streaming-iterator |
 | syn | 3.0.6 | MIT OR Apache-2.0 | https://github.com/dtolnay/syn |
 | thiserror | 2.0.21 | MIT OR Apache-2.0 | https://github.com/dtolnay/thiserror |
 | thiserror-impl | 2.0.21 | MIT OR Apache-2.0 | https://github.com/dtolnay/thiserror |
+| toml | 0.8.23 | MIT OR Apache-2.0 | https://github.com/toml-rs/toml |
+| toml_datetime | 0.6.11 | MIT OR Apache-2.0 | https://github.com/toml-rs/toml |
+| toml_edit | 0.22.27 | MIT OR Apache-2.0 | https://github.com/toml-rs/toml |
 | tree-sitter | 0.25.10 | MIT | https://github.com/tree-sitter/tree-sitter |
 | tree-sitter-bash | 0.25.1 | MIT | https://github.com/tree-sitter/tree-sitter-bash |
 | tree-sitter-css | 0.25.0 | MIT | https://github.com/tree-sitter/tree-sitter-css |
@@ -81,6 +85,7 @@ crates.io and the repositories listed below; none are modified.
 | winapi-util | 0.1.11 | Unlicense OR MIT | https://github.com/BurntSushi/winapi-util |
 | windows-link | 0.2.1 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs |
 | windows-sys | 0.61.2 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs |
+| winnow | 0.7.15 | MIT | https://github.com/winnow-rs/winnow |
 | zmij | 1.0.23 | MIT | https://github.com/dtolnay/zmij |
 
 `nucleo-matcher` is licensed under the Mozilla Public License 2.0; its source

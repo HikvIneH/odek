@@ -7,6 +7,7 @@
 | ⌘T | New tab in the current folder and group |
 | ⌘O | New tab in a folder you pick (a file you pick opens in the code viewer) |
 | ⇧⌘N | New group |
+| ⇧⌘O | Open a profile: a saved group of tabs, splits, folders and commands ([profiles](profiles.md)) |
 | ⌘D / ⇧⌘D | Split right / split down |
 | ⌘W / ⇧⌘W | Close pane (in the code viewer: the file, then the pane) / close tab |
 | ⌘1 … ⌘8, ⌘9 | Go to tab 1 … 8, last tab |

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Profiles: save a group (tabs, splits, each pane's folder and running
+  command) and open it again with ⇧⌘O, or at launch with
+  `open_at_launch = true`. Plain TOML files in `~/.config/odek/profiles`;
+  see [docs/profiles.md](docs/profiles.md)
+- Closing a panel (Settings, Keyboard Shortcuts, the profile picker) no longer
+  quits odek while its window is minimized
+
 ## 0.3.0 — 2026-10-12
 
 - Tells you when a new version is out: a daily check of the latest GitHub

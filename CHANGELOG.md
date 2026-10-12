@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 — 2026-10-12
 
 - Profiles: save a group (tabs, splits, each pane's folder and running
   command) and open it again with ⇧⌘O, or at launch with

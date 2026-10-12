@@ -33,8 +33,8 @@ where memory is needed for builds and browsers.
 
 odek does the everyday job with what macOS already has: AppKit and Core Text
 draw every character, a terminal cell takes 8 bytes, and scrollback has a hard
-cap. One idle shell uses about 38 MB and six busy panes about 70 MB; see
-[Performance](docs/performance.md).
+cap. One idle shell uses about 40 MB and six panes with a full scrollback about
+80 MB, window included; see [Performance](docs/performance.md).
 
 ## Features
 

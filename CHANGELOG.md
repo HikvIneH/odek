@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Ignores the trackpad for a moment after typing (on by default, Settings ▸
+  Trackpad): a palm brushing it no longer moves the cursor in Claude Code's
+  prompt, switches panes or scrolls
+
 ## 0.4.1 — 2026-10-12
 
 - Keyboard Shortcuts (⌘/) is larger and centred over the window, with every

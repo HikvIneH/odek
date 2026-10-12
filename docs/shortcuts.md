@@ -103,6 +103,11 @@ which refuses rather than merging when your branch has diverged.
   code viewer stay solid), with an optional blur of what's behind the window
 - **Option sends Meta**: on, Option+key sends Esc+key as most shells and
   agents expect; off, Option types characters such as ™ and accents
+- **Trackpad: ignore it for a moment after typing** (on by default): for 0.6 s
+  after each key press, trackpad clicks, taps and scrolling are ignored, so a
+  palm brushing the trackpad can't move the cursor in Claude Code's prompt
+  (which takes clicks), switch panes or scroll away. A mouse wheel still
+  scrolls; ⌘-shortcuts don't count as typing
 
 Notifications for background tabs are off by default; turn them on in **View ▸ Notify When a
 Background Tab Needs Attention**. Claude Code rings the terminal bell when it

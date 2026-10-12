@@ -26,6 +26,7 @@ const SCROLLBACK: &str = "terminalScrollback";
 const OPTION_META: &str = "optionAsMeta";
 const OPACITY: &str = "terminalOpacity";
 const BLUR: &str = "terminalBlur";
+const PALM: &str = "ignoreTrackpadWhileTyping";
 
 const AUTOMATIC: &str = "Automatic (Nerd Font if installed)";
 const SIZES: std::ops::RangeInclusive<isize> = 9..=24;
@@ -117,6 +118,12 @@ pub fn blur() -> bool {
     defaults().boolForKey(&key(BLUR))
 }
 
+/// Ignore trackpad clicks and scrolling just after a key press (on unless
+/// turned off).
+pub fn ignore_trackpad_while_typing() -> bool {
+    defaults().objectForKey(&key(PALM)).is_none() || defaults().boolForKey(&key(PALM))
+}
+
 pub fn option_as_meta() -> bool {
     defaults().objectForKey(&key(OPTION_META)).is_none() || defaults().boolForKey(&key(OPTION_META))
 }
@@ -175,7 +182,7 @@ const LABEL_W: f64 = 120.0;
 const MARGIN: f64 = 20.0;
 
 fn build(mtm: MainThreadMarker) -> Panel {
-    let height = 7.0 * ROW + 2.0 * MARGIN;
+    let height = 8.0 * ROW + 2.0 * MARGIN;
     let frame = NSRect::new(NSPoint::ZERO, NSSize::new(WIDTH, height));
     let window = unsafe {
         NSWindow::initWithContentRect_styleMask_backing_defer(
@@ -357,6 +364,27 @@ fn build(mtm: MainThreadMarker) -> Panel {
     });
     place("Keyboard", &meta, wide);
 
+    let t = Target::new(mtm, |sender| {
+        if let Some(b) = sender.and_then(|s| s.downcast_ref::<NSButton>()) {
+            defaults().setBool_forKey(b.state() == NSControlStateValueOn, &key(PALM));
+        }
+    });
+    let palm = unsafe {
+        NSButton::checkboxWithTitle_target_action(
+            &key("Ignore it for a moment after typing"),
+            Some(&t as &AnyObject),
+            Some(Target::action()),
+            mtm,
+        )
+    };
+    targets.push(t);
+    palm.setState(if ignore_trackpad_while_typing() {
+        NSControlStateValueOn
+    } else {
+        0
+    });
+    place("Trackpad", &palm, wide);
+
     Panel {
         window,
         _targets: targets,
@@ -390,7 +418,7 @@ pub fn set_raw(name: &str, value: &str) {
     let value = (!value.is_empty()).then_some(value);
     match (name, value.and_then(|v| v.parse::<isize>().ok())) {
         (SIZE | SCROLLBACK | OPACITY, Some(n)) => defaults().setInteger_forKey(n, &key(name)),
-        (OPTION_META | BLUR, _) => match value {
+        (OPTION_META | BLUR | PALM, _) => match value {
             Some(v) => defaults().setBool_forKey(v == "1", &key(name)),
             None => defaults().removeObjectForKey(&key(name)),
         },

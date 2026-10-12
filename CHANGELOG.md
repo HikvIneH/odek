@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.2 — 2026-10-12
 
 - Ignores the trackpad for a moment after typing (on by default, Settings ▸
   Trackpad): a palm brushing it no longer moves the cursor in Claude Code's

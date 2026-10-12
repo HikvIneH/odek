@@ -49,6 +49,7 @@ cap. One idle shell uses about 40 MB and six panes with a full scrollback about
 - Split panes side by side or stacked, with draggable dividers
 - Optional notifications when a background tab needs you; click to jump there
 - Groups, tabs, splits and folders come back on relaunch
+- Profiles: save a group's tabs, splits, folders and commands, reopen it with ⇧⌘O or at launch; plain TOML you can edit and share ([docs/profiles.md](docs/profiles.md))
 - Asks before closing anything with a running program or unsaved file
 
 **Terminal**
@@ -126,6 +127,7 @@ All keys, Vim mode, the git status bar and settings: [docs/shortcuts.md](docs/sh
 ## Documentation
 
 - [Keyboard shortcuts and settings](docs/shortcuts.md): every key for tabs, panes, the terminal and the code viewer, Vim mode, git and settings
+- [Profiles](docs/profiles.md): saved groups that open with ⇧⌘O or at launch, and their TOML format
 - [Performance](docs/performance.md): what the memory numbers mean, the full table and how to reproduce it
 - [Development](docs/development.md): building, testing, off-screen snapshots, how it works, project layout and contributing
 

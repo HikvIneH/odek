@@ -64,6 +64,7 @@ define_class!(
             }
             let bench = Workbench::new(ProtocolObject::from_ref(self), self.mtm());
             bench.start(self.ivars().open_dir.clone(), true);
+            bench.open_launch_profiles();
             for path in self.ivars().pending.take() {
                 bench.open_path(&path);
             }
@@ -75,7 +76,19 @@ define_class!(
 
         #[unsafe(method(applicationShouldTerminateAfterLastWindowClosed:))]
         fn terminate_after_last_window(&self, _app: &NSApplication) -> bool {
-            true
+            // Quit with the workspace window, not with a panel (a picker,
+            // Settings) going away while the window is minimized. Scripted
+            // runs have no window on screen and end with their `quit` step.
+            #[cfg(feature = "selftest")]
+            let scripted = snap::active();
+            #[cfg(not(feature = "selftest"))]
+            let scripted = false;
+            !scripted
+                && self
+                    .ivars()
+                    .bench
+                    .get()
+                    .is_none_or(|b| !b.window.isVisible() && !b.window.isMiniaturized())
         }
 
         #[unsafe(method(application:openURLs:))]
@@ -153,6 +166,21 @@ define_class!(
         #[unsafe(method(termNewGroup:))]
         fn menu_new_group(&self, _sender: Option<&AnyObject>) {
             self.with_bench(|b| b.new_group());
+        }
+
+        #[unsafe(method(termOpenProfile:))]
+        fn menu_open_profile(&self, _sender: Option<&AnyObject>) {
+            self.with_bench(|b| b.show_profiles());
+        }
+
+        #[unsafe(method(termSaveProfile:))]
+        fn menu_save_profile(&self, _sender: Option<&AnyObject>) {
+            self.with_bench(|b| b.save_active_group_as_profile());
+        }
+
+        #[unsafe(method(termEditProfiles:))]
+        fn menu_edit_profiles(&self, _sender: Option<&AnyObject>) {
+            self.with_bench(|b| b.edit_profiles());
         }
 
         #[unsafe(method(termSplitRight:))]
@@ -554,6 +582,10 @@ impl TermApp {
                     item("New Tab", Some(sel!(termNewTab:)), "t", cmd),
                     item("New Tab in Folder…", Some(sel!(appOpenFolder:)), "o", cmd),
                     item("New Group…", Some(sel!(termNewGroup:)), "n", cmd | shift),
+                    sep(),
+                    item("Open Profile…", Some(sel!(termOpenProfile:)), "o", cmd | shift),
+                    item("Save Group as Profile…", Some(sel!(termSaveProfile:)), "", cmd),
+                    item("Edit Profiles…", Some(sel!(termEditProfiles:)), "", cmd),
                     sep(),
                     item("Split Right", Some(sel!(termSplitRight:)), "d", cmd),
                     item("Split Down", Some(sel!(termSplitDown:)), "d", cmd | shift),
@@ -989,6 +1021,31 @@ mod snap {
             "snapshortcuts" => {
                 if let Some(content) = super::super::shortcuts::content_view() {
                     snapshot(&content, &out.join(format!("{arg}.png")));
+                }
+            }
+            "profiles" => bench.iter().for_each(|b| b.show_profiles()),
+            "closeprofiles" => super::super::profile_panel::close(),
+            "shortcuts" => super::super::shortcuts::toggle(app_mtm()),
+            "footprint" => println!(
+                "SNAP footprint {arg}: {:.1} MB (main window visible: {})",
+                footprint_mb(),
+                bench.as_ref().is_some_and(|b| b.window.isVisible())
+            ),
+            "snapprofiles" => {
+                if let Some(content) = super::super::profile_panel::content_view() {
+                    snapshot(&content, &out.join(format!("{arg}.png")));
+                }
+            }
+            "launchprofiles" => bench.iter().for_each(|b| b.open_launch_profiles()),
+            "openprofile" => {
+                let (another, name) = match arg.strip_prefix("another ") {
+                    Some(name) => (true, name),
+                    None => (false, arg),
+                };
+                let dir = super::super::profile::folder().unwrap_or_default();
+                let (profiles, _) = super::super::profile::load_all(&dir);
+                if let (Some(b), Some(p)) = (bench.as_ref(), profiles.iter().find(|p| p.name == name)) {
+                    b.open_profile(p, another);
                 }
             }
             "setting" => {

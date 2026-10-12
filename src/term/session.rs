@@ -111,6 +111,28 @@ impl Session {
         if pgrp > 0 { pgrp } else { self.pid }
     }
 
+    /// The foreground program's arguments (`["claude", "--model", "fable"]`),
+    /// or None while the shell itself is in the foreground. Read on demand
+    /// (saving a profile), never kept.
+    pub fn foreground_args(&self) -> Option<Vec<String>> {
+        let pid = self.foreground_pid();
+        if pid == self.pid {
+            return None;
+        }
+        let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
+        let mut size: libc::size_t = 0;
+        let null = std::ptr::null_mut();
+        if unsafe { libc::sysctl(mib.as_mut_ptr(), 3, null, &mut size, null, 0) } != 0 {
+            return None;
+        }
+        let mut buf = vec![0u8; size];
+        if unsafe { libc::sysctl(mib.as_mut_ptr(), 3, buf.as_mut_ptr().cast(), &mut size, null, 0) } != 0 {
+            return None;
+        }
+        buf.truncate(size);
+        parse_procargs(&buf)
+    }
+
     pub fn foreground_name(&self) -> Option<String> {
         let mut buf = [0u8; 256];
         let n = unsafe { libc::proc_name(self.foreground_pid(), buf.as_mut_ptr().cast(), buf.len() as u32) };
@@ -213,6 +235,22 @@ impl Reader {
             (self.wake)();
         }
     }
+}
+
+/// A process's arguments from a KERN_PROCARGS2 buffer: argc (int), the
+/// executable's path, NUL padding, then argc NUL-terminated arguments.
+fn parse_procargs(buf: &[u8]) -> Option<Vec<String>> {
+    let argc = i32::from_ne_bytes(buf.get(..4)?.try_into().ok()?);
+    let argc = usize::try_from(argc).ok().filter(|&n| n > 0)?;
+    let rest = &buf[4..];
+    let rest = &rest[rest.iter().position(|&b| b == 0)?..];
+    let rest = &rest[rest.iter().position(|&b| b != 0)?..];
+    let args: Vec<String> = rest
+        .split(|&b| b == 0)
+        .take(argc)
+        .map(|a| String::from_utf8_lossy(a).into_owned())
+        .collect();
+    (args.len() == argc).then_some(args)
 }
 
 fn winsize(cols: u16, rows: u16, cell_px: (u16, u16)) -> libc::winsize {
@@ -321,6 +359,18 @@ fn fork_shell(opts: &Spawn) -> io::Result<(OwnedFd, libc::pid_t)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_process_arguments() {
+        let mut buf = 3i32.to_ne_bytes().to_vec();
+        buf.extend_from_slice(b"/usr/local/bin/claude\0\0\0\0claude\0--model\0fable\0HOME=/x\0");
+        assert_eq!(parse_procargs(&buf).unwrap(), ["claude", "--model", "fable"]);
+        assert_eq!(parse_procargs(&buf[..4]), None);
+        assert_eq!(parse_procargs(&0i32.to_ne_bytes()), None);
+        let mut short = 5i32.to_ne_bytes().to_vec();
+        short.extend_from_slice(b"/bin/x\0x\0");
+        assert_eq!(parse_procargs(&short), None);
+    }
 
     #[test]
     fn runs_a_command_in_a_pty() {

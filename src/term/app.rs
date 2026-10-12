@@ -58,6 +58,7 @@ define_class!(
         fn did_finish_launching(&self, _n: &NSNotification) {
             let app = NSApplication::sharedApplication(self.mtm());
             app.setMainMenu(Some(&self.build_menu()));
+            super::palm::install();
             #[cfg(feature = "selftest")]
             if snap::active() {
                 return snap::start(self);
@@ -1026,6 +1027,14 @@ mod snap {
             "profiles" => bench.iter().for_each(|b| b.show_profiles()),
             "closeprofiles" => super::super::profile_panel::close(),
             "shortcuts" => super::super::shortcuts::toggle(app_mtm()),
+            "modes" => {
+                let _ = view.with_term(|t| {
+                    println!(
+                        "SNAP modes: mouse {:?}, sgr {}, alt screen {}, bracketed paste {}",
+                        t.modes.mouse, t.modes.mouse_sgr, t.alt_active, t.modes.bracketed_paste
+                    )
+                });
+            }
             "footprint" => println!(
                 "SNAP footprint {arg}: {:.1} MB (main window visible: {})",
                 footprint_mb(),

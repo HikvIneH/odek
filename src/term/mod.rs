@@ -9,6 +9,7 @@ mod ime;
 pub mod input;
 pub mod links;
 mod notify;
+mod palm;
 mod profile;
 mod profile_panel;
 pub mod session;

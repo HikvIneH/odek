@@ -1,10 +1,16 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 — 2026-10-12
 
 - Tells you when a new version is out: a daily check of the latest GitHub
   release, plus Odek ▸ Check for Updates… (turn the daily check off in the same
   menu)
+- Faster scrolling: output that scrolls the whole screen comes in about 2.5×
+  faster and plain scrolling about 1.9×, with no extra memory
+- Fixed: clicking a tab in the sidebar selected a split tab further down
+  instead, when the clicked tab sat above one
+- Performance page rewritten with on-screen memory, throughput and how it's
+  measured
 
 ## 0.2.0 — 2026-10-10
 

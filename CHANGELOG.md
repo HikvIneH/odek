@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.1 — 2026-10-12
 
 - Keyboard Shortcuts (⌘/) is larger and centred over the window, with every
   command in three columns, so nothing needs scrolling

@@ -1225,6 +1225,7 @@ impl TermView {
         match input::encode_key(&chars, &bare, mods, app_cursor) {
             Some(bytes) if !bytes.is_empty() => {
                 NSCursor::setHiddenUntilMouseMoves(true);
+                self.clear_selection();
                 self.follow_output();
                 self.write(&bytes);
             }
@@ -1239,6 +1240,7 @@ impl TermView {
     /// Committed text from the input system (typing, dead keys, emoji picker, IME).
     pub fn commit_text(&self, text: &str) {
         self.ivars().ime.clear();
+        self.ivars().selection.set(None);
         NSCursor::setHiddenUntilMouseMoves(true);
         self.follow_output();
         self.write(text.as_bytes());
@@ -1287,6 +1289,13 @@ impl TermView {
     fn edit_term(&self, f: impl FnOnce(&mut Term)) {
         self.with_term_mut(f);
         self.reset_view();
+    }
+
+    /// Typing or clicking into the program lets go of a selection (⌘A included).
+    fn clear_selection(&self) {
+        if self.ivars().selection.take().is_some() {
+            self.setNeedsDisplay(true);
+        }
     }
 
     fn reset_view(&self) {
@@ -1412,6 +1421,9 @@ impl TermView {
         if mouse != MouseMode::Off && sgr && !flags.contains(NSEventModifierFlags::Shift) {
             if kind == MouseKind::Drag && mouse == MouseMode::Click {
                 return;
+            }
+            if kind == MouseKind::Down {
+                self.clear_selection();
             }
             if let Some((col, row)) = self.cell_at(p) {
                 let mods = Mods {

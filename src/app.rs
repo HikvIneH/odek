@@ -112,6 +112,8 @@ struct Tab {
     /// Clip-view origin to restore; `None` = top-left of a fresh tab.
     scroll: Option<NSPoint>,
     last_used: u64,
+    /// An image or PDF, shown over the editor instead of its text.
+    media: Option<crate::media::Kind>,
 }
 
 #[derive(Default)]
@@ -153,6 +155,7 @@ struct Ui {
     colors: Vec<Retained<NSColor>>,
     git_button: Retained<NSButton>,
     vim_label: Retained<NSTextField>,
+    media: crate::media::Media,
 }
 
 pub struct Ivars {
@@ -665,10 +668,19 @@ struct Loaded {
     text: String,
     read_only: bool,
     highlight: bool,
+    media: Option<crate::media::Kind>,
 }
 
 fn load_file(path: &Path) -> std::io::Result<Loaded> {
     let size = fs::metadata(path)?.len();
+    if let Some(kind) = crate::media::kind(path) {
+        return Ok(Loaded {
+            text: String::new(),
+            read_only: true,
+            highlight: false,
+            media: Some(kind),
+        });
+    }
     let mut bytes = fs::read(path)?;
     let mut read_only = false;
     if size > HUGE_FILE {
@@ -680,6 +692,7 @@ fn load_file(path: &Path) -> std::io::Result<Loaded> {
             text: format!("Binary file ({} KB), not shown.", size / 1024),
             read_only: true,
             highlight: false,
+            media: None,
         });
     }
     let mut text = match String::from_utf8(bytes) {
@@ -700,6 +713,7 @@ fn load_file(path: &Path) -> std::io::Result<Loaded> {
         text,
         read_only,
         highlight: size <= HIGHLIGHT_LIMIT,
+        media: None,
     })
 }
 
@@ -1242,6 +1256,8 @@ impl App {
             );
         }
         editor_side.addSubview(&scroll);
+        let media = crate::media::Media::new(scroll.frame(), mtm);
+        editor_side.addSubview(&media.root);
 
         split.addSubview(&side_scroll);
         split.addSubview(&editor_side);
@@ -1381,6 +1397,7 @@ impl App {
             git_button,
             vim_label,
             code,
+            media,
         };
         let _ = self.ivars().ui.set(ui);
         self.vim_update_ui();
@@ -1747,6 +1764,9 @@ impl App {
                 if loaded.highlight {
                     self.highlight_tab(i);
                 }
+                if is_current && let Some(kind) = loaded.media {
+                    ui.media.show(&path, kind);
+                }
                 if is_current {
                     ui.ruler.text_changed();
                     let len = storage.length();
@@ -1800,6 +1820,7 @@ impl App {
             selection: NSRange::new(0, 0),
             scroll: None,
             last_used: 0,
+            media: loaded.media,
         };
         drop(loaded);
 
@@ -1857,7 +1878,7 @@ impl App {
 
     fn activate_tab(&self, i: usize) {
         let ui = self.ui();
-        let (storage, read_only, wrap, selection, scroll, path) = {
+        let (storage, read_only, wrap, selection, scroll, path, media) = {
             let mut tabs = self.ivars().tabs.borrow_mut();
             if i >= tabs.list.len() {
                 return;
@@ -1886,6 +1907,7 @@ impl App {
                 t.selection,
                 t.scroll,
                 t.path.clone(),
+                t.media,
             )
         };
         ui.text.breakUndoCoalescing();
@@ -1910,8 +1932,17 @@ impl App {
             .scrollToPoint(scroll.unwrap_or(NSPoint::new(-insets.left, -insets.top)));
         ui.scroll.reflectScrolledClipView(&ui.scroll.contentView());
         self.apply_highlight();
+        let shown = media.is_some_and(|k| ui.media.show(&path, k));
+        if !shown {
+            ui.media.hide();
+        }
+        ui.scroll.setHidden(shown);
         if let Some(w) = self.host_window() {
-            w.makeFirstResponder(Some(&ui.text));
+            if shown {
+                w.makeFirstResponder(Some(&ui.media.focus_view()));
+            } else {
+                w.makeFirstResponder(Some(&ui.text));
+            }
         }
         let name = path
             .file_name()
@@ -1925,6 +1956,8 @@ impl App {
     fn show_placeholder(&self) {
         let ui = self.ui();
         ui.layout.replaceTextStorage(&ui.placeholder);
+        ui.media.hide();
+        ui.scroll.setHidden(false);
         ui.text.setEditable(false);
         ui.scroll.setRulersVisible(false);
         self.set_wrap(false);

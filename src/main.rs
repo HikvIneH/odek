@@ -4,6 +4,7 @@ mod edit;
 mod fuzzy;
 mod git;
 mod highlight;
+mod media;
 mod ruler;
 mod term;
 mod theme;

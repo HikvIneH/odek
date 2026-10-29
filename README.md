@@ -125,10 +125,33 @@ one window. You can also drop a folder or file on the Dock icon.
 
 All keys, Vim mode, the git status bar and settings: [docs/shortcuts.md](docs/shortcuts.md).
 
+### Separate logins per group
+
+Each profile's group runs in a home folder of its own, so you can be logged
+in to your work Railway in one group and your personal one in another, with
+no `railway logout` / `railway login` when you switch. The same goes for
+anything a CLI keeps under home: `gh`, `~/.aws`, `~/.kube`, `~/.docker`, ….
+Your shell setup, git and ssh keys, toolchains and folders are shared, so
+every group feels like your usual terminal.
+
+Say which logins a profile shares in its TOML:
+
+```toml
+# ~/.config/odek/profiles/work.toml
+name = "Work"
+share = [".config/gh"]     # same GitHub account everywhere
+
+[[tabs]]
+dir = "~/code/work"
+```
+
+Then log in once in each group (`railway login`, `aws configure`, …) and it
+stays logged in there. Details: [docs/profiles.md](docs/profiles.md#a-home-of-its-own).
+
 ## Documentation
 
 - [Keyboard shortcuts and settings](docs/shortcuts.md): every key for tabs, panes, the terminal and the code viewer, Vim mode, git and settings
-- [Profiles](docs/profiles.md): saved groups that open with ⇧⌘O or at launch, and their TOML format
+- [Profiles](docs/profiles.md): saved groups that open with ⇧⌘O or at launch, their TOML format, and each group's own home for separate logins
 - [Performance](docs/performance.md): what the memory numbers mean, the full table and how to reproduce it
 - [Development](docs/development.md): building, testing, off-screen snapshots, how it works, project layout and contributing
 

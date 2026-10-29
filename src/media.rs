@@ -162,8 +162,10 @@ impl Inset for NSRect {
     fn inset(self, d: f64) -> Self {
         NSRect::new(
             objc2_foundation::NSPoint::new(self.origin.x + d, self.origin.y + d),
-            NSSize::new((self.size.width - 2.0 * d).max(0.0), (self.size.height - 2.0 * d).max(0.0)),
+            NSSize::new(
+                (self.size.width - 2.0 * d).max(0.0),
+                (self.size.height - 2.0 * d).max(0.0),
+            ),
         )
     }
 }
-

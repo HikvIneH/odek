@@ -4,6 +4,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -585,8 +586,14 @@ impl TermView {
         *self.ivars().on_event.borrow_mut() = Some(Box::new(f));
     }
 
-    /// Start the shell (or `command` through the login shell) in `cwd`.
-    pub fn start(&self, cwd: &Path, command: Option<&str>) -> std::io::Result<()> {
+    /// Start the shell (or `command` through the login shell) in `cwd`, with
+    /// `env` set on top of odek's own.
+    pub fn start(
+        &self,
+        cwd: &Path,
+        command: Option<&str>,
+        env: &[(OsString, OsString)],
+    ) -> std::io::Result<()> {
         let (cols, rows) = self.grid_size();
         let id = self.ivars().id;
         let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
@@ -603,6 +610,7 @@ impl TermView {
             cols,
             rows,
             cell_px: (m.cw.round() as u16, m.ch.round() as u16),
+            env,
         };
         let session = Session::spawn(&opts, wake)?;
         {

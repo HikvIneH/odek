@@ -93,6 +93,60 @@ A file that can't be read is listed at the bottom of the picker with the reason
 (a misspelt field, a missing `]`, a split without panes, …); the other profiles
 still work.
 
+## A home of its own
+
+Each profile's group is secluded: its shells run with `HOME` set to a folder
+of the profile's own, `~/.config/odek/homes/<name>/`. Whatever a tool keeps
+under home stays with the profile, so you can be logged in to a different
+Railway, GitHub, AWS or Kubernetes account in each group, without
+`railway logout` and `railway login` every time you switch. Shell history is
+per profile too.
+
+What every group should see the same is linked in from your real home, where
+it exists: your shell setup (`.zshrc`, `.zprofile`, `.oh-my-zsh`, `.p10k.zsh`,
+…), `.gitconfig`, `.ssh` and `.gnupg`, editors, toolchains (`.cargo`,
+`.rustup`, `go`, `.nvm`, `.bun`, `.pyenv`, `.local`, …), Claude Code
+(`.claude`, `.claude.json`), odek's settings, and your folders (`Developer`,
+`Documents`, `Downloads`, `Desktop`, `Library`, …). Anything else, like
+`.railway`, `.config/gh`, `.aws`, `.kube`, `.docker` and `.npmrc`, starts out
+empty: log in once in the group and it stays logged in there.
+
+```toml
+name = "Client work"
+share = [".aws"]           # also linked from your real home
+private = [".claude"]      # kept apart, though linked by default
+# seclude = false          # use your real home instead
+
+[[tabs]]
+dir = "~/code/client"
+
+[env]                      # set in every shell of the group
+AWS_PROFILE = "client"
+KUBECONFIG = "~/.kube/client"   # ~/ is the profile's home
+```
+
+| Field | Meaning |
+|---|---|
+| `seclude` | `false`: the group's shells use your real home. Default `true`. |
+| `share` | More paths under home to link in from the real one. |
+| `private` | Default links to leave out, e.g. `".claude"` for a separate Claude Code setup. |
+| `[env]` | Variables set in every shell of the group, secluded or not. |
+
+Each shell also gets `ODEK_PROFILE` (the profile's name, handy in a prompt)
+and `ODEK_REAL_HOME`. Links are only made where the profile's home has nothing
+yet, so replacing one with a file of the profile's own sticks. Folders panes
+start in are your real ones, so paths and git repos are the same in every
+group.
+
+The group remembers its profile across restarts, and new tabs and splits in it
+are secluded too. A tab dragged in from another group keeps the home it
+started with. Saving a group as a profile makes its new tabs and splits run in
+the profile's home from then on. Groups that aren't from a profile use your
+real home.
+
+Logins a tool keeps in the macOS keychain rather than under home (Claude
+Code's, for one) are the same in every group.
+
 ## At launch
 
 When odek starts, it restores your groups and tabs from last time, then opens

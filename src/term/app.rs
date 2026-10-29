@@ -477,7 +477,7 @@ impl TermApp {
                 }
             }
         });
-        if let Err(e) = view.start(dir, command) {
+        if let Err(e) = view.start(dir, command, &[]) {
             eprintln!("odek: could not start shell: {e}");
         }
         if show {

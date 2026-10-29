@@ -21,7 +21,20 @@
 //!
 //! A pane can itself be a split (`{ split = "down", panes = [...] }`), and
 //! `sizes = [0.6, 0.4]` gives a split's shares (even when left out).
+//!
+//! A profile's group runs in its own home folder (see `seclude`), so logins
+//! (`railway login`, `gh auth login`, ~/.aws, …) stay with the profile:
+//!
+//! ```toml
+//! seclude = false             # use the real home instead
+//! share = [".aws"]            # also linked from the real home
+//! private = [".claude"]       # kept apart though shared by default
+//!
+//! [env]                       # set in every shell of the group
+//! AWS_PROFILE = "work"
+//! ```
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -58,6 +71,28 @@ pub struct Profile {
     pub name: String,
     pub open_at_launch: bool,
     pub tabs: Vec<ProfileTab>,
+    pub home: Home,
+}
+
+/// How a profile's shells see home: their own folder unless `seclude` is
+/// off, with `share` linked in from the real one and `private` kept out.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Home {
+    pub seclude: bool,
+    pub share: Vec<String>,
+    pub private: Vec<String>,
+    pub env: Vec<(String, String)>,
+}
+
+impl Default for Home {
+    fn default() -> Home {
+        Home {
+            seclude: true,
+            share: Vec::new(),
+            private: Vec::new(),
+            env: Vec::new(),
+        }
+    }
 }
 
 /// One entry as written in the file: a tab, a pane, or a split of either.
@@ -83,6 +118,13 @@ struct File {
     open_at_launch: bool,
     #[serde(default)]
     tabs: Vec<Item>,
+    seclude: Option<bool>,
+    #[serde(default)]
+    share: Vec<String>,
+    #[serde(default)]
+    private: Vec<String>,
+    #[serde(default)]
+    env: BTreeMap<String, String>,
 }
 
 impl Profile {
@@ -110,10 +152,24 @@ impl Profile {
                 })
             })
             .collect::<Result<_, String>>()?;
+        let paths = |list: Vec<String>| -> Result<Vec<String>, String> {
+            list.into_iter()
+                .map(|p| home_path(&p).ok_or_else(|| format!("\"{p}\" is not a path inside home")))
+                .collect()
+        };
+        if let Some(k) = file.env.keys().find(|k| k.is_empty() || k.contains('=')) {
+            return Err(format!("[env] has a bad name \"{k}\""));
+        }
         Ok(Profile {
             name,
             open_at_launch: file.open_at_launch,
             tabs,
+            home: Home {
+                seclude: file.seclude.unwrap_or(true),
+                share: paths(file.share)?,
+                private: paths(file.private)?,
+                env: file.env.into_iter().collect(),
+            },
         })
     }
 
@@ -122,6 +178,16 @@ impl Profile {
         let mut out = format!("name = {}\n", quote(&self.name));
         if self.open_at_launch {
             out.push_str("open_at_launch = true\n");
+        }
+        let home = &self.home;
+        if !home.seclude {
+            out.push_str("seclude = false\n");
+        }
+        for (key, list) in [("share", &home.share), ("private", &home.private)] {
+            if !list.is_empty() {
+                let items: Vec<String> = list.iter().map(|p| quote(p)).collect();
+                out.push_str(&format!("{key} = [{}]\n", items.join(", ")));
+            }
         }
         for tab in &self.tabs {
             out.push_str("\n[[tabs]]\n");
@@ -150,6 +216,12 @@ impl Profile {
                     }
                     out.push_str("]\n");
                 }
+            }
+        }
+        if !home.env.is_empty() {
+            out.push_str("\n[env]\n");
+            for (k, v) in &home.env {
+                out.push_str(&format!("{} = {}\n", quote(k), quote(v)));
             }
         }
         out
@@ -352,6 +424,19 @@ pub fn expand(dir: &str) -> PathBuf {
     }
 }
 
+/// A `share`/`private` entry as a path relative to home: `.aws`, `~/.aws`
+/// and `.config/gh/` all give `.aws` or `.config/gh`; nothing outside it.
+fn home_path(p: &str) -> Option<String> {
+    let p = p.trim();
+    let p = p.strip_prefix("~/").unwrap_or(p).trim_end_matches('/');
+    let ok = !p.is_empty()
+        && !p.starts_with('/')
+        && !p.starts_with('~')
+        && p.split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..");
+    ok.then(|| p.to_string())
+}
+
 /// A command line from its arguments, quoted for the shell where needed.
 pub fn command_line(args: &[String]) -> String {
     args.iter()
@@ -499,6 +584,7 @@ mod tests {
                     layout: pane("~/notes", Some("vim todo.md"), false),
                 },
             ],
+            home: Home::default(),
         }
     }
 
@@ -647,5 +733,43 @@ mod tests {
         assert!(!dir.join("old name.toml").exists());
         let _ = std::fs::remove_dir_all(&dir);
         assert!(load_all(&dir).0.is_empty());
+    }
+
+    #[test]
+    fn home_settings_read_and_write_back() {
+        let text = r#"
+            seclude = false
+            share = ["~/.aws", ".config/gcloud/"]
+            private = [".claude"]
+
+            [[tabs]]
+            dir = "~"
+
+            [env]
+            AWS_PROFILE = "work"
+        "#;
+        let p = Profile::parse(text, "w").unwrap();
+        assert_eq!(
+            p.home,
+            Home {
+                seclude: false,
+                share: vec![".aws".into(), ".config/gcloud".into()],
+                private: vec![".claude".into()],
+                env: vec![("AWS_PROFILE".into(), "work".into())],
+            }
+        );
+        let out = p.to_toml();
+        assert!(out.starts_with(
+            "name = \"w\"\nseclude = false\nshare = [\".aws\", \".config/gcloud\"]\nprivate = [\".claude\"]\n"
+        ));
+        assert!(out.ends_with("\n[env]\n\"AWS_PROFILE\" = \"work\"\n"));
+        assert_eq!(Profile::parse(&out, "w"), Ok(p));
+        // Secluded unless said otherwise.
+        assert!(Profile::parse("[[tabs]]\ndir = \"~\"", "w").unwrap().home.seclude);
+        for bad in ["/etc", "../x", "~", "a/../b", ""] {
+            let text = format!("share = [\"{bad}\"]\n[[tabs]]\ndir = \"~\"");
+            assert!(Profile::parse(&text, "w").is_err(), "{bad}");
+        }
+        assert!(Profile::parse("[[tabs]]\ndir = \"~\"\n[env]\n\"A=B\" = \"x\"", "w").is_err());
     }
 }

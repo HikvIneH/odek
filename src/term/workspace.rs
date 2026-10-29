@@ -110,6 +110,8 @@ pub struct Group {
     pub name: String,
     pub collapsed: bool,
     pub tabs: Vec<Tab>,
+    /// The profile it was opened from: its shells run in that profile's home.
+    pub profile: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -141,6 +143,7 @@ impl Workspace {
             name: name.to_string(),
             collapsed: false,
             tabs: Vec::new(),
+            profile: None,
         });
         id
     }
@@ -316,6 +319,10 @@ impl Workspace {
         let mut out = String::from("odek-workspace 1\n");
         for g in &self.groups {
             out.push_str(&format!("group {} {}\n", g.collapsed as u8, one_line(&g.name)));
+            // Its own line, which older versions pass over.
+            if let Some(p) = &g.profile {
+                out.push_str(&format!("  profile {}\n", one_line(p)));
+            }
             for t in &g.tabs {
                 let active = (self.active == Some(t.id)) as u8;
                 out.push_str(&format!(
@@ -343,6 +350,10 @@ impl Workspace {
                 let id = ws.add_group(name);
                 ws.groups.last_mut().unwrap().collapsed = collapsed == "1";
                 let _ = id;
+            } else if let Some(name) = line.strip_prefix("profile ") {
+                if let Some(g) = ws.groups.last_mut() {
+                    g.profile = (!name.is_empty()).then(|| name.to_string());
+                }
             } else if let Some(rest) = line.strip_prefix("tab ") {
                 let (active, name) = rest.split_once(' ').unwrap_or((rest, ""));
                 let mut focus = None;
@@ -510,6 +521,7 @@ mod tests {
         ws.split(tab, p3, true);
         ws.tab_mut(tab).unwrap().name = Some("POS machine".into());
         ws.groups[0].collapsed = true;
+        ws.groups[0].profile = Some("Work".into());
         let text = ws.save(|id| {
             Some(PathBuf::from(format!(
                 "/dir/{}",
@@ -520,6 +532,8 @@ mod tests {
         assert_eq!(back.groups.len(), 2);
         assert_eq!(back.groups[0].name, "Work");
         assert!(back.groups[0].collapsed);
+        assert_eq!(back.groups[0].profile.as_deref(), Some("Work"));
+        assert_eq!(back.groups[1].profile, None);
         let t = back.active_tab().unwrap();
         assert_eq!(t.name.as_deref(), Some("POS machine"));
         let ids = t.root.panes();

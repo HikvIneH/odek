@@ -6,6 +6,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
 
@@ -24,6 +25,7 @@ use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 use super::header::{HEADER_H, PaneBox, PaneHeader};
 use super::profile::{self, Layout, Profile, ProfileTab};
 use super::profile_panel;
+use super::seclude;
 use super::settings;
 use super::sidebar::{PaneRow, Row, RowKey, Sidebar, SidebarEvent};
 use super::target::Target;
@@ -193,10 +195,17 @@ impl Workbench {
         let saved = Self::save_path().and_then(|p| std::fs::read_to_string(p).ok());
         let restored = saved.as_deref().and_then(Workspace::load);
         match restored {
-            Some((ws, panes)) if !panes.is_empty() => {
+            Some((mut ws, panes)) if !panes.is_empty() => {
+                adopt_profiles(&mut ws);
                 *self.ws.borrow_mut() = ws;
+                let mut envs: HashMap<Option<Id>, Vec<(OsString, OsString)>> = HashMap::new();
                 for (id, dir) in panes {
-                    self.make_pane(id, &dir);
+                    let group = {
+                        let ws = self.ws.borrow();
+                        ws.tab_of_pane(id).and_then(|t| ws.group_of(t))
+                    };
+                    let env = envs.entry(group).or_insert_with(|| self.group_env(group));
+                    self.make_pane(id, &dir, env);
                 }
             }
             _ => {
@@ -315,7 +324,20 @@ impl Workbench {
 
     // ---- panes ----
 
-    fn make_pane(&self, id: Id, dir: &Path) {
+    /// What a shell in `group` starts with on top of odek's environment: its
+    /// profile's home and `[env]`, read from the profile's file now.
+    fn group_env(&self, group: Option<Id>) -> Vec<(OsString, OsString)> {
+        let name = group.and_then(|g| {
+            let ws = self.ws.borrow();
+            ws.groups
+                .iter()
+                .find(|x| x.id == g)
+                .and_then(|x| x.profile.clone())
+        });
+        name.map(|n| seclude::env_named(&n)).unwrap_or_default()
+    }
+
+    fn make_pane(&self, id: Id, dir: &Path, env: &[(OsString, OsString)]) {
         let mtm = self.mtm;
         let size = self.content.bounds().size;
         let frame = NSRect::new(NSPoint::new(0.0, 0.0), size);
@@ -353,7 +375,7 @@ impl Workbench {
         } else {
             std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default()
         };
-        if let Err(e) = term.start(&dir, None) {
+        if let Err(e) = term.start(&dir, None, env) {
             eprintln!("odek: could not start shell: {e}");
         }
         self.panes.borrow_mut().insert(
@@ -845,7 +867,7 @@ impl Workbench {
     fn new_tab_at(&self, group: Id, after: Option<Id>, dir: &Path) {
         self.sync_ratios();
         let pane = self.ws.borrow_mut().new_id();
-        self.make_pane(pane, dir);
+        self.make_pane(pane, dir, &self.group_env(Some(group)));
         self.ws.borrow_mut().add_tab(group, after, pane);
         self.show_active();
         self.focus_active_pane();
@@ -859,7 +881,8 @@ impl Workbench {
         self.sync_ratios();
         let dir = self.current_dir();
         let pane = self.ws.borrow_mut().new_id();
-        self.make_pane(pane, &dir);
+        let group = self.ws.borrow().group_of(tab);
+        self.make_pane(pane, &dir, &self.group_env(group));
         self.ws.borrow_mut().split(tab, pane, across);
         self.show_active();
         self.focus_active_pane();
@@ -1118,11 +1141,15 @@ impl Workbench {
         }
         self.sync_ratios();
         let group = self.ws.borrow_mut().add_group(&p.name);
+        if let Some(g) = self.ws.borrow_mut().groups.iter_mut().find(|g| g.id == group) {
+            g.profile = Some(p.name.clone());
+        }
+        let env = seclude::env_for(p);
         let mut runs = Vec::new();
         let (mut first, mut last) = (None, None);
         for t in &p.tabs {
             let mut focus = None;
-            let root = self.build_layout(&t.layout, &mut runs, &mut focus);
+            let root = self.build_layout(&t.layout, &env, &mut runs, &mut focus);
             let lead = root.panes()[0];
             let mut ws = self.ws.borrow_mut();
             let id = ws.add_tab(group, last, lead);
@@ -1148,11 +1175,17 @@ impl Workbench {
         }
     }
 
-    fn build_layout(&self, layout: &Layout, runs: &mut Vec<(Id, String)>, focus: &mut Option<Id>) -> Node {
+    fn build_layout(
+        &self,
+        layout: &Layout,
+        env: &[(OsString, OsString)],
+        runs: &mut Vec<(Id, String)>,
+        focus: &mut Option<Id>,
+    ) -> Node {
         match layout {
             Layout::Pane { dir, run, focused } => {
                 let id = self.ws.borrow_mut().new_id();
-                self.make_pane(id, &profile::expand(dir));
+                self.make_pane(id, &profile::expand(dir), env);
                 if let Some(cmd) = run {
                     runs.push((id, cmd.clone()));
                 }
@@ -1169,8 +1202,8 @@ impl Workbench {
             } => Node::Split {
                 across: *across,
                 ratio: *ratio,
-                first: Box::new(self.build_layout(first, runs, focus)),
-                second: Box::new(self.build_layout(second, runs, focus)),
+                first: Box::new(self.build_layout(first, env, runs, focus)),
+                second: Box::new(self.build_layout(second, env, runs, focus)),
             },
         }
     }
@@ -1208,14 +1241,24 @@ impl Workbench {
             let (Some(mut p), Some(dir)) = (b.capture_profile(group, name), profile::folder()) else {
                 return;
             };
-            // Saving over a profile keeps whether it opens at launch.
-            p.open_at_launch = profile::load_all(&dir)
+            // Saving over a profile keeps whether it opens at launch and its home.
+            if let Some(old) = profile::load_all(&dir)
                 .0
-                .iter()
-                .any(|old| old.open_at_launch && old.name.eq_ignore_ascii_case(&p.name));
+                .into_iter()
+                .find(|old| old.name.eq_ignore_ascii_case(&p.name))
+            {
+                p.open_at_launch = old.open_at_launch;
+                p.home = old.home;
+            }
             if let Err(e) = profile::save(&dir, &p) {
                 eprintln!("odek: could not save the profile: {e}");
+                return;
             }
+            // New tabs and splits in it now run in the profile's home.
+            if let Some(g) = b.ws.borrow_mut().groups.iter_mut().find(|g| g.id == group) {
+                g.profile = Some(p.name.clone());
+            }
+            b.save();
         });
     }
 
@@ -1242,6 +1285,7 @@ impl Workbench {
             name: name.to_string(),
             open_at_launch: false,
             tabs,
+            home: Default::default(),
         })
     }
 
@@ -1636,6 +1680,22 @@ fn program_of(term: &TermView) -> Option<String> {
     let name = term.foreground_name()?;
     let base = name.trim_start_matches('-');
     (!SHELLS.contains(&base)).then(|| base.to_string())
+}
+
+/// Groups saved before groups remembered their profile: one named like a
+/// profile was opened from it (as `open_launch_profiles` also assumes).
+fn adopt_profiles(ws: &mut Workspace) {
+    if ws.groups.iter().all(|g| g.profile.is_some()) {
+        return;
+    }
+    let Some(dir) = profile::folder() else { return };
+    let (profiles, _) = profile::load_all(&dir);
+    for g in ws.groups.iter_mut().filter(|g| g.profile.is_none()) {
+        g.profile = profiles
+            .iter()
+            .find(|p| p.name.eq_ignore_ascii_case(&g.name))
+            .map(|p| p.name.clone());
+    }
 }
 
 /// `zsh`, `-zsh` or `/bin/zsh`: a shell, not a program worth re-running.

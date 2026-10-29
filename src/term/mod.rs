@@ -12,6 +12,7 @@ mod notify;
 mod palm;
 mod profile;
 mod profile_panel;
+mod seclude;
 pub mod session;
 mod settings;
 mod shortcuts;

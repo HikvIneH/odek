@@ -1,7 +1,7 @@
 //! One shell: a pty, the child process, a reader thread that feeds `Term`, and
 //! a writer thread so a big paste never blocks the UI.
 
-use std::ffi::{CStr, CString, OsStr};
+use std::ffi::{CStr, CString, OsStr, OsString};
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
@@ -36,6 +36,8 @@ pub struct Spawn<'a> {
     pub cols: u16,
     pub rows: u16,
     pub cell_px: (u16, u16),
+    /// Set on top of odek's own environment (a secluded profile's HOME).
+    pub env: &'a [(OsString, OsString)],
 }
 
 pub struct Session {
@@ -276,12 +278,14 @@ fn login_shell() -> CString {
     c"/bin/zsh".into()
 }
 
-fn child_env() -> Vec<CString> {
+fn child_env(extra: &[(OsString, OsString)]) -> Vec<CString> {
     let mut env: Vec<CString> = std::env::vars_os()
         .filter(|(k, _)| {
             let k = k.to_string_lossy();
             !DROP_ENV.contains(&k.as_ref()) && !DROP_ENV_PREFIX.iter().any(|p| k.starts_with(p))
         })
+        .filter(|(k, _)| !extra.iter().any(|(e, _)| e == k))
+        .chain(extra.iter().cloned())
         .filter_map(|(k, v)| {
             let mut kv = k.as_bytes().to_vec();
             kv.push(b'=');
@@ -326,7 +330,7 @@ fn fork_shell(opts: &Spawn) -> io::Result<(OwnedFd, libc::pid_t)> {
     };
     let mut argv_ptrs: Vec<*const libc::c_char> = argv.iter().map(|s| s.as_ptr()).collect();
     argv_ptrs.push(std::ptr::null());
-    let env = child_env();
+    let env = child_env(opts.env);
     let mut env_ptrs: Vec<*const libc::c_char> = env.iter().map(|s| s.as_ptr()).collect();
     env_ptrs.push(std::ptr::null());
     let cwd = CString::new(opts.cwd.as_os_str().as_bytes())?;
@@ -379,12 +383,14 @@ mod tests {
         let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
             let _ = tx.lock().unwrap().send(());
         });
+        let env = [(OsString::from("ODEK_TEST_HOME"), OsString::from("secluded"))];
         let opts = Spawn {
             cwd: Path::new("/tmp"),
-            command: Some("printf 'cols=%s\\n' $(tput cols); pwd; echo $TERM_PROGRAM"),
+            command: Some("printf 'cols=%s\\n' $(tput cols); pwd; echo $TERM_PROGRAM $ODEK_TEST_HOME"),
             cols: 77,
             rows: 10,
             cell_px: (8, 16),
+            env: &env,
         };
         let s = Session::spawn(&opts, wake).unwrap();
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -395,7 +401,7 @@ mod tests {
         let text = s.term.lock().unwrap().screen_text();
         assert!(text.contains("cols=77"), "{text}");
         assert!(text.contains("/private/tmp") || text.contains("\n/tmp"), "{text}");
-        assert!(text.contains("Odek"), "{text}");
+        assert!(text.contains("Odek secluded"), "{text}");
         assert_eq!(*s.exited.lock().unwrap(), Some(0));
     }
 }

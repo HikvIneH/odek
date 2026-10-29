@@ -50,6 +50,7 @@ cap. One idle shell uses about 40 MB and six panes with a full scrollback about
 - Optional notifications when a background tab needs you; click to jump there
 - Groups, tabs, splits and folders come back on relaunch
 - Profiles: save a group's tabs, splits, folders and commands, reopen it with ⇧⌘O or at launch; plain TOML you can edit and share ([docs/profiles.md](docs/profiles.md))
+- Each profile's group gets a home of its own, so CLI logins (Railway, GitHub, AWS, …) stay separate per group; your shell setup, keys and toolchains are shared
 - Asks before closing anything with a running program or unsaved file
 
 **Terminal**

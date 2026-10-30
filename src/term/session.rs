@@ -136,8 +136,14 @@ impl Session {
     }
 
     pub fn foreground_name(&self) -> Option<String> {
+        let pid = self.foreground_pid();
+        let mut path = [0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+        let n = unsafe { libc::proc_pidpath(pid, path.as_mut_ptr().cast(), path.len() as u32) };
+        if n > 0 && is_claude_build(Path::new(OsStr::from_bytes(&path[..n as usize]))) {
+            return Some("claude".into());
+        }
         let mut buf = [0u8; 256];
-        let n = unsafe { libc::proc_name(self.foreground_pid(), buf.as_mut_ptr().cast(), buf.len() as u32) };
+        let n = unsafe { libc::proc_name(pid, buf.as_mut_ptr().cast(), buf.len() as u32) };
         (n > 0).then(|| String::from_utf8_lossy(&buf[..n as usize]).into_owned())
     }
 
@@ -255,6 +261,13 @@ fn parse_procargs(buf: &[u8]) -> Option<Vec<String>> {
     (args.len() == argc).then_some(args)
 }
 
+/// Claude Code's native install runs `~/.local/share/claude/versions/2.1.314`,
+/// so its process is named after the version, not "claude".
+fn is_claude_build(exe: &Path) -> bool {
+    let mut up = exe.ancestors().skip(1).filter_map(Path::file_name);
+    up.next() == Some(OsStr::new("versions")) && up.next() == Some(OsStr::new("claude"))
+}
+
 fn winsize(cols: u16, rows: u16, cell_px: (u16, u16)) -> libc::winsize {
     libc::winsize {
         ws_row: rows,
@@ -363,6 +376,16 @@ fn fork_shell(opts: &Spawn) -> io::Result<(OwnedFd, libc::pid_t)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spots_claude_native_builds() {
+        assert!(is_claude_build(Path::new(
+            "/Users/a/.local/share/claude/versions/2.1.314"
+        )));
+        assert!(!is_claude_build(Path::new("/opt/homebrew/bin/claude")));
+        assert!(!is_claude_build(Path::new("/usr/local/lib/node/versions/22.1.0")));
+        assert!(!is_claude_build(Path::new("/versions")));
+    }
 
     #[test]
     fn parses_process_arguments() {

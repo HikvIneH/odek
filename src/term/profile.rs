@@ -241,38 +241,6 @@ impl Profile {
         }
         out
     }
-
-    /// What its group is called in front of Claude's titles and sessions:
-    /// the last part of the folder its panes share, so `~/Developer/personal`
-    /// gives `personal`. None when they share nothing below home.
-    pub fn label(&self) -> Option<String> {
-        let mut dirs = Vec::new();
-        for tab in &self.tabs {
-            pane_dirs(&tab.layout, &mut dirs);
-        }
-        let mut common = dirs.pop()?;
-        for d in &dirs {
-            while !d.starts_with(&common) {
-                if !common.pop() {
-                    return None;
-                }
-            }
-        }
-        if common == expand("~") {
-            return None;
-        }
-        common.file_name().map(|n| n.to_string_lossy().into_owned())
-    }
-}
-
-fn pane_dirs(layout: &Layout, out: &mut Vec<PathBuf>) {
-    match layout {
-        Layout::Pane { dir, .. } => out.push(expand(dir)),
-        Layout::Split { first, second, .. } => {
-            pane_dirs(first, out);
-            pane_dirs(second, out);
-        }
-    }
 }
 
 /// An entry from the file as a layout: a pane, or its panes split evenly
@@ -736,26 +704,6 @@ mod tests {
         assert_eq!(expand("~"), home);
         assert_eq!(expand("~/a/b"), home.join("a/b"));
         assert_eq!(expand("/etc"), PathBuf::from("/etc"));
-    }
-
-    #[test]
-    fn labels_by_the_folder_panes_share() {
-        let label = |toml: &str| Profile::parse(toml, "p").unwrap().label();
-        let personal = r#"
-[[tabs]]
-split = "across"
-panes = [{ dir = "~/Developer/personal" }, { dir = "~/Developer/personal", run = "claude" }]
-"#;
-        assert_eq!(label(personal).as_deref(), Some("personal"));
-        let storybox = r#"
-[[tabs]]
-split = "across"
-panes = [{ dir = "~/Developer/storybox/storybox/backend" }, { dir = "~/Developer/storybox/storybox" }]
-"#;
-        assert_eq!(label(storybox).as_deref(), Some("storybox"));
-        let apart = "[[tabs]]\ndir = \"~/Developer/a\"\n[[tabs]]\ndir = \"/tmp\"";
-        assert_eq!(label(apart), None);
-        assert_eq!(label("[[tabs]]\ndir = \"~\""), None);
     }
 
     #[test]

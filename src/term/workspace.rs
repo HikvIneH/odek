@@ -112,6 +112,17 @@ pub struct Group {
     pub tabs: Vec<Tab>,
     /// The profile it was opened from: its shells run in that profile's home.
     pub profile: Option<String>,
+    /// That profile's label, put in front of Claude's titles; not saved,
+    /// read from the profile when it opens or the workspace is restored.
+    pub label: Option<String>,
+}
+
+impl Group {
+    /// What it's called in front of Claude's titles: its profile's label,
+    /// else its name.
+    pub fn label(&self) -> &str {
+        self.label.as_deref().unwrap_or(&self.name)
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -144,6 +155,7 @@ impl Workspace {
             collapsed: false,
             tabs: Vec::new(),
             profile: None,
+            label: None,
         });
         id
     }
@@ -186,11 +198,11 @@ impl Workspace {
             .map(|g| g.id)
     }
 
-    pub fn group_name_of(&self, tab: Id) -> &str {
+    pub fn group_label_of(&self, tab: Id) -> &str {
         self.groups
             .iter()
             .find(|g| g.tabs.iter().any(|t| t.id == tab))
-            .map_or("", |g| g.name.as_str())
+            .map_or("", Group::label)
     }
 
     pub fn active_tab(&self) -> Option<&Tab> {

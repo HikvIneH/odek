@@ -186,6 +186,13 @@ impl Workspace {
             .map(|g| g.id)
     }
 
+    pub fn group_name_of(&self, tab: Id) -> &str {
+        self.groups
+            .iter()
+            .find(|g| g.tabs.iter().any(|t| t.id == tab))
+            .map_or("", |g| g.name.as_str())
+    }
+
     pub fn active_tab(&self) -> Option<&Tab> {
         self.tab(self.active?)
     }

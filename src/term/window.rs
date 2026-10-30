@@ -484,7 +484,7 @@ impl Workbench {
         let (title, dir) = {
             let ws = self.ws.borrow();
             ws.tab(tab)
-                .map(|t| self.tab_title(t, ws.group_label_of(tab)))
+                .map(|t| self.tab_title(t, &ws.group_label_of(tab)))
                 .unwrap_or_default()
         };
         super::notify::post(
@@ -658,7 +658,7 @@ impl Workbench {
                 count: g.tabs.len(),
             });
             for t in &g.tabs {
-                let (title, subtitle) = self.tab_title(t, g.label());
+                let (title, subtitle) = self.tab_title(t, &g.label());
                 let panes = self.panes.borrow();
                 let ids = t.root.panes();
                 let attention = ids.iter().any(|i| panes.get(i).is_some_and(|p| p.attention));
@@ -671,7 +671,7 @@ impl Workbench {
                         .map(|&id| match (panes.get(&id), viewer.as_ref()) {
                             (Some(p), _) => PaneRow {
                                 id,
-                                title: grouped_title(g.label(), p),
+                                title: grouped_title(&g.label(), p),
                                 subtitle: p.cwd.as_deref().map(tilde).unwrap_or_default(),
                                 focused: id == t.focus,
                                 attention: p.attention,
@@ -713,12 +713,12 @@ impl Workbench {
         self.sidebar.set_rows(rows);
         if let Some(tab) = ws.active_tab() {
             let group = ws.group_label_of(tab.id);
-            let (title, _) = self.tab_title(tab, group);
+            let (title, _) = self.tab_title(tab, &group);
             self.window.setTitle(&NSString::from_str(&title));
             let panes = self.panes.borrow();
             for id in tab.root.panes() {
                 if let Some(p) = panes.get(&id) {
-                    p.header.set(&grouped_title(group, p), id == tab.focus);
+                    p.header.set(&grouped_title(&group, p), id == tab.focus);
                 }
             }
             if let Some(v) = self.viewer.borrow().as_ref() {
@@ -1146,10 +1146,10 @@ impl Workbench {
         }
         self.sync_ratios();
         let group = self.ws.borrow_mut().add_group(&p.name);
-        let label = p.label().unwrap_or_else(|| p.name.clone());
+        let mut label = String::new();
         if let Some(g) = self.ws.borrow_mut().groups.iter_mut().find(|g| g.id == group) {
             g.profile = Some(p.name.clone());
-            g.label = Some(label.clone());
+            label = g.label();
         }
         let env = seclude::env_for(p);
         let mut runs = Vec::new();
@@ -1265,7 +1265,6 @@ impl Workbench {
             // New tabs and splits in it now run in the profile's home.
             if let Some(g) = b.ws.borrow_mut().groups.iter_mut().find(|g| g.id == group) {
                 g.profile = Some(p.name.clone());
-                g.label = p.label();
             }
             b.save();
         });
@@ -1732,18 +1731,19 @@ fn program_of(term: &TermView) -> Option<String> {
     (!SHELLS.contains(&base)).then(|| base.to_string())
 }
 
-/// Each group's profile and its label. Groups saved before groups
-/// remembered their profile: one named like a profile was opened from it
-/// (as `open_launch_profiles` also assumes).
+/// Groups saved before groups remembered their profile: one named like a
+/// profile was opened from it (as `open_launch_profiles` also assumes).
 fn adopt_profiles(ws: &mut Workspace) {
+    if ws.groups.iter().all(|g| g.profile.is_some()) {
+        return;
+    }
     let Some(dir) = profile::folder() else { return };
     let (profiles, _) = profile::load_all(&dir);
-    for g in &mut ws.groups {
-        let named = g.profile.as_deref().unwrap_or(&g.name);
-        if let Some(p) = profiles.iter().find(|p| p.name.eq_ignore_ascii_case(named)) {
-            g.profile = Some(p.name.clone());
-            g.label = p.label();
-        }
+    for g in ws.groups.iter_mut().filter(|g| g.profile.is_none()) {
+        g.profile = profiles
+            .iter()
+            .find(|p| p.name.eq_ignore_ascii_case(&g.name))
+            .map(|p| p.name.clone());
     }
 }
 

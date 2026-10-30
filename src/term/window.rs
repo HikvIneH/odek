@@ -484,7 +484,7 @@ impl Workbench {
         let (title, dir) = {
             let ws = self.ws.borrow();
             ws.tab(tab)
-                .map(|t| self.tab_title(t, ws.group_name_of(tab)))
+                .map(|t| self.tab_title(t, ws.group_label_of(tab)))
                 .unwrap_or_default()
         };
         super::notify::post(
@@ -642,9 +642,7 @@ impl Workbench {
         let panes = self.panes.borrow();
         let p = panes.get(&tab.focus);
         let dir = p.and_then(|p| p.cwd.as_deref()).map(tilde).unwrap_or_default();
-        let auto = p
-            .map(|p| with_group(group, p.program.as_deref(), pane_title(p)))
-            .unwrap_or_default();
+        let auto = p.map(|p| grouped_title(group, p)).unwrap_or_default();
         (tab.name.clone().unwrap_or(auto), dir)
     }
 
@@ -660,7 +658,7 @@ impl Workbench {
                 count: g.tabs.len(),
             });
             for t in &g.tabs {
-                let (title, subtitle) = self.tab_title(t, &g.name);
+                let (title, subtitle) = self.tab_title(t, g.label());
                 let panes = self.panes.borrow();
                 let ids = t.root.panes();
                 let attention = ids.iter().any(|i| panes.get(i).is_some_and(|p| p.attention));
@@ -673,7 +671,7 @@ impl Workbench {
                         .map(|&id| match (panes.get(&id), viewer.as_ref()) {
                             (Some(p), _) => PaneRow {
                                 id,
-                                title: pane_title(p),
+                                title: grouped_title(g.label(), p),
                                 subtitle: p.cwd.as_deref().map(tilde).unwrap_or_default(),
                                 focused: id == t.focus,
                                 attention: p.attention,
@@ -714,12 +712,13 @@ impl Workbench {
         }
         self.sidebar.set_rows(rows);
         if let Some(tab) = ws.active_tab() {
-            let (title, _) = self.tab_title(tab, ws.group_name_of(tab.id));
+            let group = ws.group_label_of(tab.id);
+            let (title, _) = self.tab_title(tab, group);
             self.window.setTitle(&NSString::from_str(&title));
             let panes = self.panes.borrow();
             for id in tab.root.panes() {
                 if let Some(p) = panes.get(&id) {
-                    p.header.set(&pane_title(p), id == tab.focus);
+                    p.header.set(&grouped_title(group, p), id == tab.focus);
                 }
             }
             if let Some(v) = self.viewer.borrow().as_ref() {
@@ -1147,8 +1146,10 @@ impl Workbench {
         }
         self.sync_ratios();
         let group = self.ws.borrow_mut().add_group(&p.name);
+        let label = p.label().unwrap_or_else(|| p.name.clone());
         if let Some(g) = self.ws.borrow_mut().groups.iter_mut().find(|g| g.id == group) {
             g.profile = Some(p.name.clone());
+            g.label = Some(label.clone());
         }
         let env = seclude::env_for(p);
         let mut runs = Vec::new();
@@ -1176,7 +1177,8 @@ impl Workbench {
         let panes = self.panes.borrow();
         for (id, cmd) in runs {
             if let Some(pane) = panes.get(&id) {
-                pane.term.write(format!("{cmd}\r").as_bytes());
+                pane.term
+                    .write(format!("{}\r", name_claude(&cmd, &label)).as_bytes());
             }
         }
     }
@@ -1263,6 +1265,7 @@ impl Workbench {
             // New tabs and splits in it now run in the profile's home.
             if let Some(g) = b.ws.borrow_mut().groups.iter_mut().find(|g| g.id == group) {
                 g.profile = Some(p.name.clone());
+                g.label = p.label();
             }
             b.save();
         });
@@ -1637,13 +1640,45 @@ fn pane_title(p: &Pane) -> String {
     }
 }
 
-/// `Personal - ✳ fix login bug` for Claude in group "Personal".
+/// A pane's title as the sidebar, header and window show it.
+fn grouped_title(group: &str, p: &Pane) -> String {
+    with_group(group, p.program.as_deref(), pane_title(p))
+}
+
+/// `personal - ✳ fix login bug` for Claude in group "personal"; left alone
+/// when the title already names the group (a session started `-n personal`).
 fn with_group(group: &str, program: Option<&str>, title: String) -> String {
-    if program == Some("claude") && !group.is_empty() {
+    if program == Some("claude") && !group.is_empty() && !title.to_lowercase().contains(&group.to_lowercase())
+    {
         format!("{group} - {title}")
     } else {
         title
     }
+}
+
+/// A profile's `claude …` named after its group (`-n personal`), so its
+/// sessions read that way in Claude Code's lists too. Left as it is when it
+/// names, resumes or continues a session itself, or only prints.
+fn name_claude(cmd: &str, label: &str) -> String {
+    let mut words = cmd.split_whitespace();
+    let own = |w: &str| {
+        [
+            "-n",
+            "--name",
+            "-r",
+            "--resume",
+            "-c",
+            "--continue",
+            "-p",
+            "--print",
+        ]
+        .iter()
+        .any(|f| w == *f || w.starts_with(&format!("{f}=")))
+    };
+    if words.next() != Some("claude") || words.any(own) || label.is_empty() {
+        return cmd.to_string();
+    }
+    format!("{cmd} -n {}", profile::command_line(&[label.to_string()]))
 }
 
 fn place_dividers(node: &Node, view: &NSView) {
@@ -1697,19 +1732,18 @@ fn program_of(term: &TermView) -> Option<String> {
     (!SHELLS.contains(&base)).then(|| base.to_string())
 }
 
-/// Groups saved before groups remembered their profile: one named like a
-/// profile was opened from it (as `open_launch_profiles` also assumes).
+/// Each group's profile and its label. Groups saved before groups
+/// remembered their profile: one named like a profile was opened from it
+/// (as `open_launch_profiles` also assumes).
 fn adopt_profiles(ws: &mut Workspace) {
-    if ws.groups.iter().all(|g| g.profile.is_some()) {
-        return;
-    }
     let Some(dir) = profile::folder() else { return };
     let (profiles, _) = profile::load_all(&dir);
-    for g in ws.groups.iter_mut().filter(|g| g.profile.is_none()) {
-        g.profile = profiles
-            .iter()
-            .find(|p| p.name.eq_ignore_ascii_case(&g.name))
-            .map(|p| p.name.clone());
+    for g in &mut ws.groups {
+        let named = g.profile.as_deref().unwrap_or(&g.name);
+        if let Some(p) = profiles.iter().find(|p| p.name.eq_ignore_ascii_case(named)) {
+            g.profile = Some(p.name.clone());
+            g.label = p.label();
+        }
     }
 }
 
@@ -1737,7 +1771,7 @@ pub fn tilde(dir: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::with_group;
+    use super::{name_claude, with_group};
 
     #[test]
     fn claude_titles_name_their_group() {
@@ -1749,5 +1783,29 @@ mod tests {
         assert_eq!(with_group("Personal", Some("vim"), t()), "✳ fix login bug");
         assert_eq!(with_group("Personal", None, t()), "✳ fix login bug");
         assert_eq!(with_group("", Some("claude"), t()), "✳ fix login bug");
+        assert_eq!(
+            with_group("personal", Some("claude"), "✳ personal".into()),
+            "✳ personal"
+        );
+    }
+
+    #[test]
+    fn names_claude_sessions_after_the_group() {
+        assert_eq!(name_claude("claude", "personal"), "claude -n personal");
+        assert_eq!(
+            name_claude("claude --model fable", "personal"),
+            "claude --model fable -n personal"
+        );
+        assert_eq!(name_claude("claude", "my work"), "claude -n 'my work'");
+        for kept in [
+            "claude -n x",
+            "claude --name=x",
+            "claude --resume",
+            "claude -c",
+            "vim .",
+        ] {
+            assert_eq!(name_claude(kept, "personal"), kept);
+        }
+        assert_eq!(name_claude("claude", ""), "claude");
     }
 }

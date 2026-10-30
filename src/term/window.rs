@@ -483,7 +483,9 @@ impl Workbench {
         }
         let (title, dir) = {
             let ws = self.ws.borrow();
-            ws.tab(tab).map(|t| self.tab_title(t)).unwrap_or_default()
+            ws.tab(tab)
+                .map(|t| self.tab_title(t, ws.group_name_of(tab)))
+                .unwrap_or_default()
         };
         super::notify::post(
             tab,
@@ -628,7 +630,9 @@ impl Workbench {
 
     // ---- sidebar ----
 
-    fn tab_title(&self, tab: &super::workspace::Tab) -> (String, String) {
+    /// A tab's name, else its focused pane's title; Claude's titles get the
+    /// group's name in front, to tell sessions of different groups apart.
+    fn tab_title(&self, tab: &super::workspace::Tab, group: &str) -> (String, String) {
         if let Some(v) = self.viewer.borrow().as_ref()
             && v.id == tab.focus
         {
@@ -638,7 +642,9 @@ impl Workbench {
         let panes = self.panes.borrow();
         let p = panes.get(&tab.focus);
         let dir = p.and_then(|p| p.cwd.as_deref()).map(tilde).unwrap_or_default();
-        let auto = p.map(pane_title).unwrap_or_default();
+        let auto = p
+            .map(|p| with_group(group, p.program.as_deref(), pane_title(p)))
+            .unwrap_or_default();
         (tab.name.clone().unwrap_or(auto), dir)
     }
 
@@ -654,7 +660,7 @@ impl Workbench {
                 count: g.tabs.len(),
             });
             for t in &g.tabs {
-                let (title, subtitle) = self.tab_title(t);
+                let (title, subtitle) = self.tab_title(t, &g.name);
                 let panes = self.panes.borrow();
                 let ids = t.root.panes();
                 let attention = ids.iter().any(|i| panes.get(i).is_some_and(|p| p.attention));
@@ -708,7 +714,7 @@ impl Workbench {
         }
         self.sidebar.set_rows(rows);
         if let Some(tab) = ws.active_tab() {
-            let (title, _) = self.tab_title(tab);
+            let (title, _) = self.tab_title(tab, ws.group_name_of(tab.id));
             self.window.setTitle(&NSString::from_str(&title));
             let panes = self.panes.borrow();
             for id in tab.root.panes() {
@@ -1631,6 +1637,15 @@ fn pane_title(p: &Pane) -> String {
     }
 }
 
+/// `Personal - ✳ fix login bug` for Claude in group "Personal".
+fn with_group(group: &str, program: Option<&str>, title: String) -> String {
+    if program == Some("claude") && !group.is_empty() {
+        format!("{group} - {title}")
+    } else {
+        title
+    }
+}
+
 fn place_dividers(node: &Node, view: &NSView) {
     if let Node::Split {
         across,
@@ -1717,5 +1732,22 @@ pub fn tilde(dir: &Path) -> String {
         Some(rest) if rest.as_os_str().is_empty() => "~".into(),
         Some(rest) => format!("~/{}", rest.display()),
         None => dir.display().to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::with_group;
+
+    #[test]
+    fn claude_titles_name_their_group() {
+        let t = || "✳ fix login bug".to_string();
+        assert_eq!(
+            with_group("Personal", Some("claude"), t()),
+            "Personal - ✳ fix login bug"
+        );
+        assert_eq!(with_group("Personal", Some("vim"), t()), "✳ fix login bug");
+        assert_eq!(with_group("Personal", None, t()), "✳ fix login bug");
+        assert_eq!(with_group("", Some("claude"), t()), "✳ fix login bug");
     }
 }

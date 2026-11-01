@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.0 — 2026-11-01
+
+- Images and PDFs open in the viewer instead of showing "Binary file":
+  images scale down to fit, PDFs scroll as continuous pages with pinch to
+  zoom
+- Each profile's group gets a home of its own (~/.config/odek/homes/<name>),
+  so CLI logins (railway, gh, aws, …) stay with the profile; shell setup,
+  git, ssh, toolchains and Claude Code are linked in from the real home.
+  Profiles gain seclude, share, private and an [env] table
+- Tabs running Claude are prefixed with their group's name (personal - ✳ fix
+  login bug) in the sidebar, window title and notifications, and `claude -n`
+  gets the same name
+- Claude Code's native build is recognised as claude
+- Typing or clicking into the program clears the terminal selection
+
 ## 0.4.2 — 2026-10-12
 
 - Ignores the trackpad for a moment after typing (on by default, Settings ▸

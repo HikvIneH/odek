@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.1 — 2026-11-04
 
 - Claude Code sessions started in a profile's group fail to open no more:
   `claude` runs with the real home, so its config and sessions have one path

@@ -144,6 +144,14 @@ started with. Saving a group as a profile makes its new tabs and splits run in
 the profile's home from then on. Groups that aren't from a profile use your
 real home.
 
+Claude Code is the exception: in a secluded group `claude` runs with your real
+home, so its settings and sessions have one path and every session opens from
+any group. Its Bash commands still get the group's home, so `railway`, `aws`
+and the like use the group's logins there too. odek does this for zsh with a
+small startup folder (`ZDOTDIR`, in `~/.config/odek/homes/.zsh`) that hands
+over to your own setup and defines a `claude` function. Making `.claude` or
+`.claude.json` private turns this off.
+
 Logins a tool keeps in the macOS keychain rather than under home (Claude
 Code's, for one) are the same in every group.
 

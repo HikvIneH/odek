@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Claude Code sessions started in a profile's group fail to open no more:
+  `claude` runs with the real home, so its config and sessions have one path
+  in every group, while its Bash commands keep the group's home (and its
+  railway, aws, … logins)
+
 ## 0.5.0 — 2026-11-01
 
 - Images and PDFs open in the viewer instead of showing "Binary file":

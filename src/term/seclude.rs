@@ -129,6 +129,16 @@ fn env_in(p: &Profile, real: &Path, homes: &Path) -> io::Result<Vec<(OsString, O
         (OsString::from("HOME"), home.clone().into_os_string()),
         (OsString::from("ODEK_REAL_HOME"), real.as_os_str().to_owned()),
     ];
+    // Claude Code shared with the real home runs there itself (see
+    // `claude_shim`), so its config and sessions keep one path.
+    let private = |k: &str| p.home.private.iter().any(|s| s == k);
+    if !private(".claude") && !private(".claude.json") {
+        let shim = claude_shim(homes)?;
+        if let Some(z) = std::env::var_os("ZDOTDIR") {
+            env.push(("ODEK_ZDOTDIR".into(), z));
+        }
+        env.push(("ZDOTDIR".into(), shim.into_os_string()));
+    }
     // XDG folders set to somewhere under the real home move with it.
     for key in [
         "XDG_CONFIG_HOME",
@@ -159,6 +169,45 @@ fn own_env(p: &Profile, real: &Path, home: Option<&Path>) -> Vec<(OsString, OsSt
         env.push((k.into(), v));
     }
     env
+}
+
+/// A zsh startup folder (`ZDOTDIR`) that puts the user's own back, then
+/// wraps `claude` so it runs with the real HOME. Claude Code keeps its config
+/// and sessions under home; seeing them through a profile's home gives them a
+/// second path, and sessions saved under one fail to open from the other.
+/// Its Bash commands still get the profile's home (via `CLAUDE_ENV_FILE`), so
+/// logins such as railway and aws stay with the profile there too.
+fn claude_shim(homes: &Path) -> io::Result<PathBuf> {
+    let dir = homes.join(".zsh");
+    std::fs::create_dir_all(&dir)?;
+    let env_file = dir.join("claude-env.sh");
+    let zshenv = format!(
+        r#"# Written by odek for secluded profiles; it is rewritten at each start.
+# Put the user's ZDOTDIR back so the rest of zsh's startup is theirs.
+if [[ -n "$ODEK_ZDOTDIR" ]]; then ZDOTDIR="$ODEK_ZDOTDIR"; else unset ZDOTDIR; fi
+unset ODEK_ZDOTDIR
+[[ -r "${{ZDOTDIR:-$HOME}}/.zshenv" ]] && source "${{ZDOTDIR:-$HOME}}/.zshenv"
+# Claude Code runs with the real home; its commands get the profile's back.
+if [[ -n "$ODEK_REAL_HOME" && "$HOME" != "$ODEK_REAL_HOME" ]]; then
+  claude() {{
+    ODEK_GROUP_HOME="$HOME" CLAUDE_ENV_FILE={env} HOME="$ODEK_REAL_HOME" command claude "$@"
+  }}
+fi
+"#,
+        env = profile::command_line(&[env_file.to_string_lossy().into_owned()]),
+    );
+    let env = "# Written by odek: run before each of Claude Code's Bash commands.\n\
+               [ -n \"$ODEK_GROUP_HOME\" ] && export HOME=\"$ODEK_GROUP_HOME\"\n";
+    write_if_changed(&dir.join(".zshenv"), &zshenv)?;
+    write_if_changed(&env_file, env)?;
+    Ok(dir)
+}
+
+fn write_if_changed(path: &Path, text: &str) -> io::Result<()> {
+    if std::fs::read_to_string(path).is_ok_and(|t| t == text) {
+        return Ok(());
+    }
+    std::fs::write(path, text)
 }
 
 /// Link `rel` in `home` to the real one, if that exists and `home` has
@@ -259,6 +308,27 @@ mod tests {
         assert_eq!(std::fs::read_to_string(home.join(".zshrc")).unwrap(), "mine");
         assert!(home.join(".ssh").symlink_metadata().is_err());
         assert!(real.join(".ssh").is_dir());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn claude_runs_in_the_real_home() {
+        let root = tmp("claude");
+        let homes = root.join("homes");
+        let env = env_in(&profile(Home::default()), &root, &homes).unwrap();
+        let shim = homes.join(".zsh");
+        assert_eq!(get(&env, "ZDOTDIR"), Some(&shim.clone().into_os_string()));
+        let zshenv = std::fs::read_to_string(shim.join(".zshenv")).unwrap();
+        assert!(zshenv.contains("HOME=\"$ODEK_REAL_HOME\" command claude \"$@\""));
+        assert!(zshenv.contains(&shim.join("claude-env.sh").to_string_lossy().into_owned()));
+        let env_file = std::fs::read_to_string(shim.join("claude-env.sh")).unwrap();
+        assert!(env_file.contains("export HOME=\"$ODEK_GROUP_HOME\""));
+        // A profile keeping Claude Code apart keeps its own home for it.
+        let p = profile(Home {
+            private: vec![".claude".into()],
+            ..Home::default()
+        });
+        assert_eq!(get(&env_in(&p, &root, &homes).unwrap(), "ZDOTDIR"), None);
         let _ = std::fs::remove_dir_all(&root);
     }
 

@@ -1146,10 +1146,8 @@ impl Workbench {
         }
         self.sync_ratios();
         let group = self.ws.borrow_mut().add_group(&p.name);
-        let mut label = String::new();
         if let Some(g) = self.ws.borrow_mut().groups.iter_mut().find(|g| g.id == group) {
             g.profile = Some(p.name.clone());
-            label = g.label();
         }
         let env = seclude::env_for(p);
         let mut runs = Vec::new();
@@ -1178,7 +1176,7 @@ impl Workbench {
         for (id, cmd) in runs {
             if let Some(pane) = panes.get(&id) {
                 pane.term
-                    .write(format!("{}\r", name_claude(&cmd, &label)).as_bytes());
+                    .write(format!("{cmd}\r").as_bytes());
             }
         }
     }
@@ -1645,7 +1643,7 @@ fn grouped_title(group: &str, p: &Pane) -> String {
 }
 
 /// `personal - ✳ fix login bug` for Claude in group "personal"; left alone
-/// when the title already names the group (a session started `-n personal`).
+/// when the title already names the group.
 fn with_group(group: &str, program: Option<&str>, title: String) -> String {
     if program == Some("claude") && !group.is_empty() && !title.to_lowercase().contains(&group.to_lowercase())
     {
@@ -1653,31 +1651,6 @@ fn with_group(group: &str, program: Option<&str>, title: String) -> String {
     } else {
         title
     }
-}
-
-/// A profile's `claude …` named after its group (`-n personal`), so its
-/// sessions read that way in Claude Code's lists too. Left as it is when it
-/// names, resumes or continues a session itself, or only prints.
-fn name_claude(cmd: &str, label: &str) -> String {
-    let mut words = cmd.split_whitespace();
-    let own = |w: &str| {
-        [
-            "-n",
-            "--name",
-            "-r",
-            "--resume",
-            "-c",
-            "--continue",
-            "-p",
-            "--print",
-        ]
-        .iter()
-        .any(|f| w == *f || w.starts_with(&format!("{f}=")))
-    };
-    if words.next() != Some("claude") || words.any(own) || label.is_empty() {
-        return cmd.to_string();
-    }
-    format!("{cmd} -n {}", profile::command_line(&[label.to_string()]))
 }
 
 fn place_dividers(node: &Node, view: &NSView) {
@@ -1771,7 +1744,7 @@ pub fn tilde(dir: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{name_claude, with_group};
+    use super::with_group;
 
     #[test]
     fn claude_titles_name_their_group() {
@@ -1787,25 +1760,5 @@ mod tests {
             with_group("personal", Some("claude"), "✳ personal".into()),
             "✳ personal"
         );
-    }
-
-    #[test]
-    fn names_claude_sessions_after_the_group() {
-        assert_eq!(name_claude("claude", "personal"), "claude -n personal");
-        assert_eq!(
-            name_claude("claude --model fable", "personal"),
-            "claude --model fable -n personal"
-        );
-        assert_eq!(name_claude("claude", "my work"), "claude -n 'my work'");
-        for kept in [
-            "claude -n x",
-            "claude --name=x",
-            "claude --resume",
-            "claude -c",
-            "vim .",
-        ] {
-            assert_eq!(name_claude(kept, "personal"), kept);
-        }
-        assert_eq!(name_claude("claude", ""), "claude");
     }
 }
